@@ -193,6 +193,96 @@ export class DGIIService {
     }
   }
 
+  async sendSummaryWithEcf(ecfData: InvoiceData, rnc: string, encf: string, environment?: string): Promise<any> {
+    try {
+      logger.info(`Sending summary with ECF - RNC: ${rnc}, e-NCF: ${encf}`);
+
+      const certs = certificateService.getCertificate(rnc);
+      const env = this.getEnvironment(environment);
+
+      const ecf = new ECF(certs, env);
+      await ecf.authenticate();
+
+      const transformer = new Transformer();
+
+      // 1. Firmar ECF completo (con DetallesItems) para guardar localmente
+      const ecfXml = transformer.json2xml(ecfData);
+      const { signedXml: signedEcfXml, securityCode: ecfSecurityCode } = await this.signXml(ecfXml, 'ECF', rnc);
+
+      // 2. Convertir ECF a RFCE (extraer solo Encabezado, sin DetallesItems)
+      const ecfEncabezado = ecfData.ECF?.Encabezado;
+      if (!ecfEncabezado) {
+        throw new AppError('Invalid ECF data: missing Encabezado', 400);
+      }
+
+      const rfceData = {
+        RFCE: {
+          Encabezado: {
+            Version: ecfEncabezado.Version || '1.0',
+            IdDoc: {
+              TipoeCF: 32,
+              eNCF: ecfEncabezado.IdDoc?.eNCF || encf,
+              TipoIngresos: ecfEncabezado.IdDoc?.TipoIngresos || '01',
+              TipoPago: ecfEncabezado.IdDoc?.TipoPago || 1,
+            },
+            Emisor: {
+              RNCEmisor: ecfEncabezado.Emisor?.RNCEmisor || rnc,
+              RazonSocialEmisor: ecfEncabezado.Emisor?.RazonSocialEmisor,
+              FechaEmision: ecfEncabezado.Emisor?.FechaEmision,
+            },
+            Comprador: {
+              RNCComprador: ecfEncabezado.Comprador?.RNCComprador,
+              RazonSocialComprador: ecfEncabezado.Comprador?.RazonSocialComprador,
+            },
+            Totales: {
+              MontoGravadoTotal: ecfEncabezado.Totales?.MontoGravadoTotal || 0,
+              MontoGravadoI1: ecfEncabezado.Totales?.MontoGravadoI1 || 0,
+              MontoExento: ecfEncabezado.Totales?.MontoExento || 0,
+              TotalITBIS: ecfEncabezado.Totales?.TotalITBIS || 0,
+              TotalITBIS1: ecfEncabezado.Totales?.TotalITBIS1 || 0,
+              MontoTotal: ecfEncabezado.Totales?.MontoTotal || 0,
+              MontoNoFacturable: ecfEncabezado.Totales?.MontoNoFacturable || 0,
+              MontoPeriodo: ecfEncabezado.Totales?.MontoTotal || 0,
+            },
+            CodigoSeguridadeCF: ecfSecurityCode,
+          },
+        },
+      };
+
+      // 3. Firmar RFCE y enviar a DGII
+      const rfceXml = transformer.json2xml(rfceData);
+      const { signedXml: signedRfceXml, securityCode: rfceSecurityCode } = await this.signXml(rfceXml, 'RFCE', rnc);
+
+      const response: any = await ecf.sendSummary(signedRfceXml, `${rnc}${encf}.xml`);
+
+      logger.info(`Summary with ECF sent successfully - TrackID: ${response?.trackId || 'unknown'}`);
+
+      // 4. Generar QR Code URL
+      const qrCodeUrl = generateEcfQRCodeURL(
+        rnc,
+        ecfEncabezado.Comprador?.RNCComprador || '',
+        encf,
+        ecfEncabezado.Totales?.MontoTotal?.toString() || '0',
+        ecfEncabezado.Emisor?.FechaEmision || '',
+        new Date().toISOString(),
+        ecfSecurityCode,
+        env
+      );
+
+      return {
+        ...response,
+        signedEcfXml,
+        signedRfceXml,
+        ecfSecurityCode,
+        rfceSecurityCode,
+        qrCodeUrl,
+      };
+    } catch (error: any) {
+      logger.error('Error sending summary with ECF:', error);
+      throw new AppError(`Error sending summary with ECF: ${error.message}`, 500);
+    }
+  }
+
   async sendApproval(approvalData: any, fileName: string, rnc?: string, environment?: string): Promise<any> {
     try {
       logger.info(`Sending commercial approval - RNC: ${rnc || 'default'}, File: ${fileName}`);

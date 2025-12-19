@@ -436,6 +436,91 @@ router.post('/send-summary', invoiceController.sendSummary);
 
 /**
  * @swagger
+ * /api/invoice/send-summary-with-ecf:
+ *   post:
+ *     summary: Enviar Resumen con ECF Firmado
+ *     description: |
+ *       Firma un ECF completo (con DetallesItems) para guardar localmente,
+ *       luego convierte a RFCE y envía el resumen a DGII.
+ *
+ *       Ideal para facturas de consumo (tipo 32) menores a RD$250,000 donde
+ *       se necesita mantener el ECF completo firmado para archivo local.
+ *     tags: [Facturas]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - invoiceData
+ *               - rnc
+ *               - encf
+ *             properties:
+ *               invoiceData:
+ *                 type: object
+ *                 description: Datos de la factura en formato ECF completo (con DetallesItems)
+ *               rnc:
+ *                 type: string
+ *                 example: "130939616"
+ *               encf:
+ *                 type: string
+ *                 example: "E320000000001"
+ *               environment:
+ *                 type: string
+ *                 enum: [test, cert, prod]
+ *                 example: "cert"
+ *     responses:
+ *       200:
+ *         description: Resumen enviado y ECF firmado exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     trackId:
+ *                       type: string
+ *                       description: ID de seguimiento de DGII
+ *                     signedEcfXml:
+ *                       type: string
+ *                       description: XML del ECF completo firmado (para guardar localmente)
+ *                     signedRfceXml:
+ *                       type: string
+ *                       description: XML del RFCE firmado (enviado a DGII)
+ *                     ecfSecurityCode:
+ *                       type: string
+ *                       description: Código de seguridad del ECF
+ *                     rfceSecurityCode:
+ *                       type: string
+ *                       description: Código de seguridad del RFCE
+ *                     qrCodeUrl:
+ *                       type: string
+ *                       description: URL del código QR
+ *       400:
+ *         description: Datos inválidos
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Error del servidor
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+router.post('/send-summary-with-ecf', invoiceController.sendSummaryWithEcf);
+
+/**
+ * @swagger
  * /api/invoice/approval:
  *   post:
  *     summary: Enviar Aprobación Comercial

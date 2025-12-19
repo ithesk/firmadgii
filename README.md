@@ -356,6 +356,94 @@ x-api-key: your_api_key
 
 ---
 
+### Enviar Resumen con ECF Firmado (< 250k)
+
+#### POST `/api/invoice/send-summary-with-ecf`
+
+Para facturas de consumo menores a RD$250,000. Este endpoint:
+1. Firma el ECF completo (con DetallesItems) → para guardar localmente
+2. Convierte a RFCE (sin DetallesItems)
+3. Firma el RFCE y envía a DGII
+
+**Headers:**
+```
+x-api-key: your_api_key
+```
+
+**Body:**
+```json
+{
+  "invoiceData": {
+    "ECF": {
+      "Encabezado": {
+        "Version": "1.0",
+        "IdDoc": {
+          "TipoeCF": 32,
+          "eNCF": "E320000000001",
+          "TipoIngresos": "01",
+          "TipoPago": 1
+        },
+        "Emisor": {
+          "RNCEmisor": "130939616",
+          "RazonSocialEmisor": "MI EMPRESA SRL",
+          "FechaEmision": "18-12-2025"
+        },
+        "Comprador": {
+          "RNCComprador": "131880681",
+          "RazonSocialComprador": "CLIENTE SRL"
+        },
+        "Totales": {
+          "MontoGravadoTotal": 10000,
+          "MontoGravadoI1": 10000,
+          "MontoExento": 0,
+          "TotalITBIS": 1800,
+          "TotalITBIS1": 1800,
+          "MontoTotal": 11800,
+          "MontoNoFacturable": 0
+        }
+      },
+      "DetallesItems": {
+        "Item": [
+          {
+            "NumeroLinea": 1,
+            "IndicadorFacturacion": 1,
+            "NombreItem": "Producto de prueba",
+            "CantidadItem": 1,
+            "PrecioUnitarioItem": 10000,
+            "MontoItem": 10000
+          }
+        ]
+      }
+    }
+  },
+  "rnc": "130939616",
+  "encf": "E320000000001",
+  "environment": "cert"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "codigo": 1,
+    "estado": "Aceptado",
+    "encf": "E320000000001",
+    "secuenciaUtilizada": true,
+    "signedEcfXml": "<ECF>...<Signature>...</Signature></ECF>",
+    "signedRfceXml": "<RFCE>...<Signature>...</Signature></RFCE>",
+    "ecfSecurityCode": "ABC123",
+    "rfceSecurityCode": "DEF456",
+    "qrCodeUrl": "https://dgii.gov.do/ecf/qr?..."
+  }
+}
+```
+
+> **Uso:** El `signedEcfXml` contiene la factura completa firmada para guardar en tu sistema. El `signedRfceXml` es el resumen que se envió a DGII.
+
+---
+
 ### Consultar Estado
 
 #### GET `/api/invoice/status/:trackId`

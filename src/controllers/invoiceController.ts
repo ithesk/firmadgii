@@ -142,3 +142,16 @@ export const generateQR = asyncHandler(async (req: Request, res: Response) => {
 
   res.json(response);
 });
+
+export const sendSummaryWithEcf = asyncHandler(async (req: Request, res: Response) => {
+  const { invoiceData, rnc, encf, environment } = req.body;
+
+  const result = await dgiiService.sendSummaryWithEcf(invoiceData, rnc, encf, environment);
+
+  const response: ApiResponse = {
+    success: true,
+    data: result,
+  };
+
+  res.json(response);
+});
