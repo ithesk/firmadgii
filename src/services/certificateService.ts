@@ -4,6 +4,7 @@ import logger from '../utils/logger';
 import { AppError } from '../middleware/errorHandler';
 import fs from 'fs';
 import path from 'path';
+import { X509Certificate } from 'crypto';
 
 export class CertificateService {
   private certificates: Map<string, any> = new Map();
@@ -43,12 +44,16 @@ export class CertificateService {
     try {
       const certs = this.getCertificate(rnc);
 
+      // certs.cert es un string PEM, necesitamos parsearlo con X509Certificate
+      const x509 = new X509Certificate(certs.cert);
+
       return {
-        subject: certs.cert.subject,
-        issuer: certs.cert.issuer,
-        validFrom: certs.cert.validity.notBefore,
-        validTo: certs.cert.validity.notAfter,
-        serialNumber: certs.cert.serialNumber,
+        subject: x509.subject,
+        issuer: x509.issuer,
+        validFrom: x509.validFrom,
+        validTo: x509.validTo,
+        serialNumber: x509.serialNumber,
+        fingerprint: x509.fingerprint256,
       };
     } catch (error: any) {
       throw new AppError(`Error getting certificate info: ${error.message}`, 500);
