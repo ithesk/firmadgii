@@ -8,6 +8,7 @@ interface Config {
   nodeEnv: string;
   certificatePath: string;
   certificatePassword: string;
+  certificateBase64: string;
   dgiiEnvironment: 'test' | 'cert' | 'prod';
   apiKey: string;
   logLevel: string;
@@ -18,6 +19,7 @@ const config: Config = {
   nodeEnv: process.env.NODE_ENV || 'development',
   certificatePath: process.env.CERTIFICATE_PATH || path.join(__dirname, '../../certificates/certificado.p12'),
   certificatePassword: process.env.CERTIFICATE_PASSWORD || '',
+  certificateBase64: process.env.CERTIFICATE_BASE64 || '',
   dgiiEnvironment: (process.env.DGII_ENVIRONMENT as 'test' | 'cert' | 'prod') || 'test',
   apiKey: process.env.API_KEY || 'development_api_key',
   logLevel: process.env.LOG_LEVEL || 'info',

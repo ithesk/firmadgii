@@ -11,14 +11,6 @@ export class CertificateService {
 
   getCertificate(rnc?: string): any {
     try {
-      const certificatePath = rnc
-        ? path.join(path.dirname(config.certificatePath), `${rnc}.p12`)
-        : config.certificatePath;
-
-      if (!fs.existsSync(certificatePath)) {
-        throw new AppError(`Certificate not found for RNC: ${rnc || 'default'}`, 404);
-      }
-
       const cacheKey = rnc || 'default';
 
       if (this.certificates.has(cacheKey)) {
@@ -26,9 +18,26 @@ export class CertificateService {
         return this.certificates.get(cacheKey);
       }
 
-      logger.info(`Loading certificate from ${certificatePath}`);
       const reader = new P12Reader(config.certificatePassword);
-      const certs = reader.getKeyFromFile(certificatePath);
+      let certs: any;
+
+      // Si hay certificado en Base64, usarlo primero (para cloud deployments)
+      if (config.certificateBase64 && !rnc) {
+        logger.info('Loading certificate from Base64');
+        certs = reader.getKeyFromStringBase64(config.certificateBase64);
+      } else {
+        // Cargar desde archivo
+        const certificatePath = rnc
+          ? path.join(path.dirname(config.certificatePath), `${rnc}.p12`)
+          : config.certificatePath;
+
+        if (!fs.existsSync(certificatePath)) {
+          throw new AppError(`Certificate not found for RNC: ${rnc || 'default'}`, 404);
+        }
+
+        logger.info(`Loading certificate from ${certificatePath}`);
+        certs = reader.getKeyFromFile(certificatePath);
+      }
 
       this.certificates.set(cacheKey, certs);
       logger.info(`Certificate loaded successfully for ${cacheKey}`);
