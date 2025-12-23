@@ -1,0 +1,226 @@
+# =============================================================================
+# Docker Compose con Nginx Proxy Manager (Interfaz Gráfica)
+# =============================================================================
+# Esta es la opción MÁS FÁCIL para configurar SSL y subdominios.
+# Nginx Proxy Manager tiene una interfaz web donde puedes:
+# - Agregar hosts proxy con clicks
+# - Configurar SSL automático con Let's Encrypt
+# - Ver logs y estadísticas
+#
+# USO:
+# 1. docker-compose -f docker-compose.npm.yml up -d
+# 2. Ir a http://tu-ip:81 para acceder al panel de administración
+# 3. Login inicial: admin@example.com / changeme
+# 4. Agregar proxy hosts desde la interfaz
+# =============================================================================
+
+version: '3.8'
+
+services:
+  # ===========================================================================
+  # Nginx Proxy Manager - Panel de Administración Web
+  # ===========================================================================
+  nginx-proxy-manager:
+    image: 'jc21/nginx-proxy-manager:latest'
+    container_name: nginx-proxy-manager
+    restart: unless-stopped
+    ports:
+      # Puerto HTTP público
+      - "80:80"
+      # Puerto HTTPS público
+      - "443:443"
+      # Puerto del Panel de Administración
+      - "81:81"
+    volumes:
+      # Datos persistentes
+      - npm_data:/data
+      - npm_letsencrypt:/etc/letsencrypt
+    environment:
+      # Deshabilitar IPv6 si causa problemas
+      DISABLE_IPV6: 'true'
+    networks:
+      - proxy
+
+  # ===========================================================================
+  # DGII e-CF Microservice
+  # ===========================================================================
+  dgii-microservice:
+    build: .
+    image: ${IMAGE_NAME:-dgii-ecf-microservice}:${IMAGE_TAG:-latest}
+    container_name: ${CONTAINER_NAME:-dgii-ecf-microservice}
+    restart: unless-stopped
+    # Exponer puerto solo en la red interna (no público)
+    expose:
+      - "3000"
+    environment:
+      # Server Configuration
+      PORT: 3000
+      NODE_ENV: ${NODE_ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      # DGII Configuration
+      DGII_ENVIRONMENT: ${DGII_ENVIRONMENT:-cert}
+
+      # Security
+      API_KEY: ${API_KEY:-change_me_in_production}
+
+      # Certificate Configuration
+      CERTIFICATE_PATH: ${CERTIFICATE_PATH:-/app/certificates/certificado.p12}
+      CERTIFICATE_PASSWORD: ${CERTIFICATE_PASSWORD}
+      CERTIFICATE_BASE64: ${CERTIFICATE_BASE64:-}
+
+      # Receptor Configuration
+      RNC_RECEPTOR: ${RNC_RECEPTOR:-}
+
+      # Odoo Integration (optional)
+      ODOO_WEBHOOK_URL: ${ODOO_WEBHOOK_URL:-}
+      ODOO_WEBHOOK_API_KEY: ${ODOO_WEBHOOK_API_KEY:-}
+    volumes:
+      - ${CERTIFICATES_PATH:-./certificates}:/app/certificates:ro
+      - ${LOGS_PATH:-./logs}:/app/logs
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    driver: bridge
+
+volumes:
+  npm_data:
+  npm_letsencrypt:
+
+# =============================================================================
+# INSTRUCCIONES DE USO
+# =============================================================================
+#
+# PASO 1: INICIAR LOS SERVICIOS
+#   docker-compose -f docker-compose.npm.yml up -d
+#
+# PASO 2: ACCEDER AL PANEL DE NGINX PROXY MANAGER
+#   Abrir en navegador: http://TU-IP-SERVIDOR:81
+#
+#   Credenciales iniciales:
+#   - Email:    admin@example.com
+#   - Password: changeme
+#
+#   ¡IMPORTANTE! Cambiar la contraseña en el primer login.
+#
+# PASO 3: CONFIGURAR DNS
+#   En tu proveedor de DNS (Cloudflare, GoDaddy, etc.):
+#   - Crear registro A: dgii.tudominio.com → IP-del-servidor
+#
+# PASO 4: AGREGAR PROXY HOST (desde la interfaz web)
+#
+#   1. Click en "Proxy Hosts" → "Add Proxy Host"
+#
+#   2. En la pestaña "Details":
+#      - Domain Names: dgii.tudominio.com
+#      - Scheme: http
+#      - Forward Hostname / IP: dgii-microservice
+#      - Forward Port: 3000
+#      - ✓ Cache Assets
+#      - ✓ Block Common Exploits
+#      - ✓ Websockets Support
+#
+#   3. En la pestaña "SSL":
+#      - SSL Certificate: Request a new SSL Certificate
+#      - ✓ Force SSL
+#      - ✓ HTTP/2 Support
+#      - Email: tu@email.com (para Let's Encrypt)
+#      - ✓ I Agree to the Let's Encrypt Terms
+#      - Click "Save"
+#
+#   4. ¡Listo! Tu API estará disponible en https://dgii.tudominio.com
+#
+# =============================================================================
+# AGREGAR ODOO U OTROS SERVICIOS
+# =============================================================================
+#
+# Para agregar Odoo, simplemente:
+#
+# 1. Agregar el servicio a este archivo:
+#
+#   odoo:
+#     image: odoo:17.0
+#     container_name: odoo
+#     expose:
+#       - "8069"
+#     environment:
+#       - HOST=db
+#       - USER=odoo
+#       - PASSWORD=odoo
+#     volumes:
+#       - odoo_data:/var/lib/odoo
+#     networks:
+#       - proxy
+#     depends_on:
+#       - db
+#
+#   db:
+#     image: postgres:15
+#     container_name: odoo-db
+#     environment:
+#       - POSTGRES_DB=postgres
+#       - POSTGRES_USER=odoo
+#       - POSTGRES_PASSWORD=odoo
+#     volumes:
+#       - postgres_data:/var/lib/postgresql/data
+#     networks:
+#       - proxy
+#
+# 2. Agregar los volúmenes:
+#   volumes:
+#     npm_data:
+#     npm_letsencrypt:
+#     odoo_data:
+#     postgres_data:
+#
+# 3. Reiniciar: docker-compose -f docker-compose.npm.yml up -d
+#
+# 4. En Nginx Proxy Manager, agregar otro Proxy Host:
+#    - Domain Names: ecf.tudominio.com
+#    - Forward Hostname: odoo
+#    - Forward Port: 8069
+#    - Configurar SSL igual que antes
+#
+# =============================================================================
+# VERIFICAR QUE FUNCIONA
+# =============================================================================
+#
+# Después de configurar, verificar:
+#
+#   curl https://dgii.tudominio.com/health
+#
+# Debería responder:
+#   {"status":"ok","timestamp":"...","environment":"cert"}
+#
+# =============================================================================
+# SOLUCIÓN DE PROBLEMAS
+# =============================================================================
+#
+# 1. No puedo acceder al panel (puerto 81):
+#    - Verificar que el puerto 81 está abierto en el firewall
+#    - sudo ufw allow 81
+#
+# 2. Error al generar certificado SSL:
+#    - Verificar que el dominio apunta correctamente al servidor
+#    - Verificar que puertos 80 y 443 están abiertos
+#    - nslookup dgii.tudominio.com (debe mostrar tu IP)
+#
+# 3. No encuentro el servicio dgii-microservice:
+#    - Usar el nombre del contenedor: dgii-ecf-microservice
+#    - O la IP interna (ver con: docker network inspect firmadgii_proxy)
+#
+# 4. Ver logs:
+#    docker logs nginx-proxy-manager
+#    docker logs dgii-ecf-microservice
+#
+# =============================================================================
