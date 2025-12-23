@@ -73,6 +73,84 @@ router.post('/sign', validateRequest(schemas.signXml), invoiceController.signXml
 
 /**
  * @swagger
+ * /api/invoice/sign-file:
+ *   post:
+ *     summary: Firmar archivo XML y descargarlo
+ *     description: |
+ *       Recibe un archivo XML sin firmar y devuelve el XML firmado listo para descargar.
+ *
+ *       **Uso desde interfaz web o curl:**
+ *       - Enviar el XML como body raw
+ *       - El XML firmado se devuelve directamente como archivo para descarga
+ *
+ *       **Detección automática del tipo de documento:**
+ *       - Si NO se especifica `documentType`, el sistema detecta automáticamente el elemento raíz del XML
+ *       - Soporta cualquier tipo de documento XML (ECF, ARECF, DeclaracionJurada, etc.)
+ *
+ *       **Parámetros de query:**
+ *       - `documentType`: (Opcional) Tipo de documento. Si se omite, se detecta automáticamente del XML
+ *       - `download`: Si es "false", devuelve XML sin forzar descarga. Default: true
+ *       - `rnc`: RNC para cargar el certificado (opcional)
+ *     tags: [Firma]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: documentType
+ *         schema:
+ *           type: string
+ *         description: |
+ *           Tipo de documento a firmar. **OPCIONAL** - Si se omite, se detecta automáticamente del XML.
+ *           Ejemplos: ECF, ARECF, ACECF, RFCE, ANECF, DeclaracionJurada, etc.
+ *       - in: query
+ *         name: download
+ *         schema:
+ *           type: string
+ *           enum: ["true", "false"]
+ *           default: "true"
+ *         description: Si es true, fuerza la descarga del archivo
+ *       - in: query
+ *         name: rnc
+ *         schema:
+ *           type: string
+ *         description: RNC para cargar el certificado
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/xml:
+ *           schema:
+ *             type: string
+ *             description: XML sin firmar
+ *         text/xml:
+ *           schema:
+ *             type: string
+ *             description: XML sin firmar
+ *     responses:
+ *       200:
+ *         description: XML firmado
+ *         content:
+ *           application/xml:
+ *             schema:
+ *               type: string
+ *               description: XML firmado con la firma digital
+ *       400:
+ *         description: XML inválido
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Error del servidor
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+import express from 'express';
+router.post('/sign-file', express.raw({ type: ['application/xml', 'text/xml', '*/*'], limit: '10mb' }), invoiceController.signXmlFile);
+
+/**
+ * @swagger
  * /api/invoice/send:
  *   post:
  *     summary: Enviar Factura
@@ -521,9 +599,93 @@ router.post('/send-summary-with-ecf', invoiceController.sendSummaryWithEcf);
 
 /**
  * @swagger
+ * /api/invoice/receipt:
+ *   post:
+ *     summary: Enviar Acuse de Recibo (ARECF)
+ *     description: |
+ *       Firma y envía un Acuse de Recibo de e-CF (ARECF) a DGII.
+ *
+ *       El ARECF es el documento que confirma la recepción técnica de un e-CF.
+ *       - Estado 0: e-CF Recibido conforme
+ *       - Estado 1: e-CF No Recibido (con código de motivo)
+ *
+ *       El nombre del archivo se genera automáticamente: RNCComprador + eNCF + .xml
+ *     tags: [Recepción]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - receiptData
+ *             properties:
+ *               receiptData:
+ *                 type: object
+ *                 description: Datos del acuse de recibo en formato DGII
+ *                 example:
+ *                   ARECF:
+ *                     DetalleAcusedeRecibo:
+ *                       Version: "1.0"
+ *                       RNCEmisor: "131880600"
+ *                       RNCComprador: "132880600"
+ *                       eNCF: "E310000000001"
+ *                       Estado: 0
+ *                       FechaHoraAcuseRecibo: "17-12-2020 11:19:06"
+ *               rnc:
+ *                 type: string
+ *                 description: RNC del receptor (tu empresa, para cargar el certificado)
+ *                 example: "132880600"
+ *               environment:
+ *                 type: string
+ *                 enum: [test, cert, prod]
+ *                 example: "cert"
+ *     responses:
+ *       200:
+ *         description: Acuse de recibo enviado exitosamente a DGII
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     trackId:
+ *                       type: string
+ *                       description: ID de seguimiento de DGII
+ *                     signedXml:
+ *                       type: string
+ *                       description: XML del ARECF firmado
+ *                     fileName:
+ *                       type: string
+ *                       description: Nombre del archivo enviado
+ *                       example: "132880600E310000000001.xml"
+ *       400:
+ *         description: Datos inválidos
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Error del servidor
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+router.post('/receipt', invoiceController.sendReceipt);
+
+/**
+ * @swagger
  * /api/invoice/approval:
  *   post:
- *     summary: Enviar Aprobación Comercial
+ *     summary: Enviar Aprobación Comercial (ACECF)
  *     description: Envía una aprobación comercial (receptor confirma recepción de factura)
  *     tags: [Aprobaciones]
  *     security:
@@ -748,5 +910,419 @@ router.get('/customer-directory/:rnc', invoiceController.getCustomerDirectory);
  *                       example: "https://dgii.gov.do/ecf/qr?data=..."
  */
 router.get('/qr/generate', invoiceController.generateQR);
+
+/**
+ * @swagger
+ * /api/invoice/receive-ecf:
+ *   post:
+ *     summary: Recibir ECF y responder con ARECF (Estándar Emisor-Receptor)
+ *     description: |
+ *       Endpoint receptor para el estándar de comunicación Emisor-Receptor de DGII.
+ *
+ *       Este endpoint recibe un ECF (Factura Electrónica) de un emisor (o de DGII en certificación)
+ *       y responde **directamente** con el ARECF firmado como respuesta HTTP.
+ *
+ *       **Flujo:**
+ *       1. El emisor envía el ECF firmado a este endpoint
+ *       2. El sistema genera el ARECF con Estado "0" (Recibido) o "1" (No Recibido)
+ *       3. El ARECF se firma con el certificado del receptor
+ *       4. Se responde con el XML del ARECF firmado (Content-Type: application/xml)
+ *
+ *       **Soporta múltiples formatos de entrada:**
+ *       - `multipart/form-data`: Estándar DGII con el XML como archivo adjunto
+ *       - `application/json`: JSON con campo `ecfXml` conteniendo el XML
+ *       - `application/xml` o `text/xml`: XML directo del ECF
+ *
+ *       **Uso en certificación DGII:**
+ *       En el proceso de certificación, DGII actúa como emisor y envía ECFs de prueba.
+ *       Este endpoint debe estar expuesto públicamente y registrado en el directorio de DGII.
+ *     tags: [Recepción]
+ *     parameters:
+ *       - in: query
+ *         name: rncReceptor
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: RNC del receptor (tu empresa)
+ *         example: "132493788"
+ *       - in: query
+ *         name: rnc
+ *         schema:
+ *           type: string
+ *         description: RNC para cargar el certificado (opcional, usa rncReceptor si no se especifica)
+ *       - in: query
+ *         name: accepted
+ *         schema:
+ *           type: string
+ *           enum: ["true", "false"]
+ *           default: "true"
+ *         description: Si el ECF es aceptado o rechazado
+ *       - in: query
+ *         name: rejectCode
+ *         schema:
+ *           type: string
+ *           enum: ["1", "2", "3", "4"]
+ *         description: |
+ *           Código de rechazo si accepted=false:
+ *           - 1: Error de especificación
+ *           - 2: Error de Firma Digital
+ *           - 3: Envío duplicado
+ *           - 4: RNC Comprador no corresponde
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               xml:
+ *                 type: string
+ *                 format: binary
+ *                 description: Archivo XML del ECF firmado
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - ecfXml
+ *             properties:
+ *               ecfXml:
+ *                 type: string
+ *                 description: XML del ECF firmado
+ *         application/xml:
+ *           schema:
+ *             type: string
+ *             description: XML del ECF firmado
+ *     responses:
+ *       200:
+ *         description: ARECF firmado como respuesta
+ *         content:
+ *           application/xml:
+ *             schema:
+ *               type: string
+ *               description: XML del ARECF firmado
+ *               example: |
+ *                 <?xml version="1.0"?>
+ *                 <ARECF xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+ *                   <DetalleAcusedeRecibo>
+ *                     <Version>1.0</Version>
+ *                     <RNCEmisor>131880600</RNCEmisor>
+ *                     <RNCComprador>132493788</RNCComprador>
+ *                     <eNCF>E310000000001</eNCF>
+ *                     <Estado>0</Estado>
+ *                     <FechaHoraAcuseRecibo>22-12-2025 10:30:00</FechaHoraAcuseRecibo>
+ *                   </DetalleAcusedeRecibo>
+ *                   <Signature>...</Signature>
+ *                 </ARECF>
+ *       400:
+ *         description: Datos inválidos
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Error del servidor
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+router.post('/receive-ecf', invoiceController.receiveEcf);
+
+/**
+ * @swagger
+ * /api/invoice/receive-ecf-json:
+ *   post:
+ *     summary: Recibir ECF y obtener ARECF en JSON
+ *     description: |
+ *       Endpoint alternativo para recibir un ECF y obtener el ARECF en formato JSON.
+ *       Útil para depuración o integración con sistemas que prefieren JSON.
+ *
+ *       A diferencia de `/receive-ecf`, este endpoint devuelve JSON con el ARECF
+ *       firmado y los datos parseados.
+ *     tags: [Recepción]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - ecfXml
+ *               - rncReceptor
+ *             properties:
+ *               ecfXml:
+ *                 type: string
+ *                 description: XML del ECF firmado recibido
+ *               rncReceptor:
+ *                 type: string
+ *                 description: RNC del receptor (tu empresa)
+ *                 example: "132493788"
+ *               rnc:
+ *                 type: string
+ *                 description: RNC para cargar el certificado
+ *               accepted:
+ *                 type: boolean
+ *                 default: true
+ *                 description: Si el ECF es aceptado
+ *               rejectCode:
+ *                 type: string
+ *                 description: Código de rechazo si accepted=false
+ *     responses:
+ *       200:
+ *         description: ARECF generado exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     signedArecfXml:
+ *                       type: string
+ *                       description: XML del ARECF firmado
+ *                     arecfData:
+ *                       type: object
+ *                       description: Datos del ARECF parseados
+ *       400:
+ *         description: Datos inválidos
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Error del servidor
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+router.post('/receive-ecf-json', invoiceController.receiveEcfJson);
+
+/**
+ * @swagger
+ * /api/invoice/acecf:
+ *   post:
+ *     summary: Enviar Aprobación Comercial (ACECF) a DGII
+ *     description: |
+ *       Envía una Aprobación Comercial de e-CF (ACECF) a DGII.
+ *
+ *       El ACECF se usa para indicar si un ECF recibido fue aprobado o rechazado
+ *       comercialmente por el receptor.
+ *
+ *       **Estados del ACECF:**
+ *       - `1`: Aprobado Comercialmente - El ECF fue aceptado
+ *       - `2`: Rechazado Comercialmente - El ECF fue rechazado (requiere motivo)
+ *
+ *       **Flujo típico:**
+ *       1. Receptor recibe ECF y envía ARECF (acuse de recibo técnico)
+ *       2. Receptor revisa el ECF y decide si lo aprueba comercialmente
+ *       3. Receptor envía ACECF con la decisión a DGII
+ *     tags: [Aprobación Comercial]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - rncEmisor
+ *               - eNCF
+ *               - fechaEmision
+ *               - montoTotal
+ *               - rncComprador
+ *               - estado
+ *             properties:
+ *               rncEmisor:
+ *                 type: string
+ *                 description: RNC del emisor del ECF original
+ *                 example: "131880600"
+ *               eNCF:
+ *                 type: string
+ *                 description: Número del e-NCF del ECF original
+ *                 example: "E310000000001"
+ *               fechaEmision:
+ *                 type: string
+ *                 description: Fecha de emisión del ECF original (formato DD-MM-YYYY)
+ *                 example: "22-12-2025"
+ *               montoTotal:
+ *                 type: number
+ *                 description: Monto total del ECF original
+ *                 example: 1180.00
+ *               rncComprador:
+ *                 type: string
+ *                 description: RNC del comprador/receptor (tu empresa)
+ *                 example: "130939616"
+ *               estado:
+ *                 type: string
+ *                 enum: ["1", "2"]
+ *                 description: |
+ *                   Estado de la aprobación comercial:
+ *                   - 1: Aprobado Comercialmente
+ *                   - 2: Rechazado Comercialmente
+ *                 example: "1"
+ *               detalleMotivoRechazo:
+ *                 type: string
+ *                 description: Motivo del rechazo (requerido si estado="2")
+ *                 example: "Productos no corresponden a la orden de compra"
+ *               rnc:
+ *                 type: string
+ *                 description: RNC para cargar el certificado
+ *               environment:
+ *                 type: string
+ *                 enum: ["test", "cert", "prod"]
+ *                 description: Ambiente de DGII
+ *     responses:
+ *       200:
+ *         description: ACECF enviado exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     success:
+ *                       type: boolean
+ *                     response:
+ *                       type: object
+ *                       description: Respuesta de DGII
+ *                     signedXml:
+ *                       type: string
+ *                       description: XML del ACECF firmado
+ *                     fileName:
+ *                       type: string
+ *                       description: Nombre del archivo enviado
+ *       400:
+ *         description: Datos inválidos
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Error del servidor
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+router.post('/acecf', invoiceController.sendAcecf);
+
+/**
+ * @swagger
+ * /api/invoice/acecf/from-ecf:
+ *   post:
+ *     summary: Procesar ACECF desde ECF XML recibido
+ *     description: |
+ *       Extrae automáticamente los datos del ECF XML recibido y envía el ACECF a DGII.
+ *
+ *       Este endpoint es útil cuando tienes el XML del ECF original y quieres
+ *       enviar la aprobación comercial sin tener que extraer manualmente los datos.
+ *
+ *       **El sistema extrae automáticamente:**
+ *       - RNC del emisor
+ *       - e-NCF
+ *       - Fecha de emisión
+ *       - Monto total
+ *       - RNC del comprador
+ *     tags: [Aprobación Comercial]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - ecfXml
+ *               - estado
+ *             properties:
+ *               ecfXml:
+ *                 type: string
+ *                 description: XML del ECF recibido
+ *               estado:
+ *                 type: string
+ *                 enum: ["1", "2"]
+ *                 description: |
+ *                   Estado de la aprobación comercial:
+ *                   - 1: Aprobado Comercialmente
+ *                   - 2: Rechazado Comercialmente
+ *                 example: "1"
+ *               motivoRechazo:
+ *                 type: string
+ *                 description: Motivo del rechazo (requerido si estado="2")
+ *               rnc:
+ *                 type: string
+ *                 description: RNC para cargar el certificado
+ *               environment:
+ *                 type: string
+ *                 enum: ["test", "cert", "prod"]
+ *                 description: Ambiente de DGII
+ *     responses:
+ *       200:
+ *         description: ACECF procesado y enviado exitosamente
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     success:
+ *                       type: boolean
+ *                     response:
+ *                       type: object
+ *                       description: Respuesta de DGII
+ *                     signedXml:
+ *                       type: string
+ *                       description: XML del ACECF firmado
+ *                     fileName:
+ *                       type: string
+ *                     ecfInfo:
+ *                       type: object
+ *                       description: Datos extraídos del ECF
+ *                       properties:
+ *                         tipoeCF:
+ *                           type: string
+ *                         eNCF:
+ *                           type: string
+ *                         rncEmisor:
+ *                           type: string
+ *                         razonSocialEmisor:
+ *                           type: string
+ *                         rncComprador:
+ *                           type: string
+ *                         montoTotal:
+ *                           type: string
+ *       400:
+ *         description: Datos inválidos
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Error del servidor
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+router.post('/acecf/from-ecf', invoiceController.processAcecfFromEcf);
 
 export default router;

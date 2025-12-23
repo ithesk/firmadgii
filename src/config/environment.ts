@@ -12,6 +12,9 @@ interface Config {
   dgiiEnvironment: 'test' | 'cert' | 'prod';
   apiKey: string;
   logLevel: string;
+  rncReceptor: string; // RNC del receptor para el endpoint Emisor-Receptor
+  odooWebhookUrl: string; // URL del endpoint de Odoo para notificar recepciones
+  odooWebhookApiKey: string; // API Key para autenticar con Odoo
 }
 
 const config: Config = {
@@ -23,6 +26,9 @@ const config: Config = {
   dgiiEnvironment: (process.env.DGII_ENVIRONMENT as 'test' | 'cert' | 'prod') || 'test',
   apiKey: process.env.API_KEY || 'development_api_key',
   logLevel: process.env.LOG_LEVEL || 'info',
+  rncReceptor: process.env.RNC_RECEPTOR || '', // RNC del receptor para endpoint DGII
+  odooWebhookUrl: process.env.ODOO_WEBHOOK_URL || '', // URL del endpoint de Odoo
+  odooWebhookApiKey: process.env.ODOO_WEBHOOK_API_KEY || '', // API Key para Odoo
 };
 
 export default config;

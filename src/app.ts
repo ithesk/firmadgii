@@ -7,6 +7,7 @@ import routes from './routes';
 import { errorHandler } from './middleware/errorHandler';
 import { authenticate } from './middleware/auth';
 import logger from './utils/logger';
+import { receiveEcf, receiveAcecf, getSeed, validateCertificate } from './controllers/invoiceController';
 
 const app = express();
 
@@ -114,6 +115,36 @@ app.get('/health', (req, res) => {
     environment: config.dgiiEnvironment,
   });
 });
+
+/**
+ * Endpoint Emisor-Receptor de DGII (SIN AUTENTICACIÓN)
+ * Este es el endpoint que DGII llamará para enviar ECFs durante certificación
+ * Path exacto requerido por el estándar: /fe/recepcion/api/ecf
+ *
+ * DGII envía el ECF como multipart/form-data y espera recibir el ARECF firmado como respuesta
+ */
+app.post('/fe/recepcion/api/ecf', express.raw({ type: '*/*', limit: '10mb' }), receiveEcf);
+
+/**
+ * Endpoint para recibir Aprobaciones Comerciales (ACECF) (SIN AUTENTICACIÓN)
+ * Este es el endpoint que DGII o emisores llamarán para enviar sus ACECFs
+ * Path: /fe/aprobacioncomercial/api/ecf
+ */
+app.post('/fe/aprobacioncomercial/api/ecf', express.raw({ type: '*/*', limit: '10mb' }), receiveAcecf);
+
+/**
+ * Endpoint para obtener semilla de autenticación (SIN AUTENTICACIÓN)
+ * El emisor llama a este endpoint para obtener una semilla que debe firmar
+ * Path: /fe/autenticacion/api/semilla
+ */
+app.get('/fe/autenticacion/api/semilla', getSeed);
+
+/**
+ * Endpoint para validar certificado/semilla firmada (SIN AUTENTICACIÓN)
+ * El emisor envía la semilla firmada y recibe un token de autenticación
+ * Path: /fe/autenticacion/api/validacioncertificado
+ */
+app.post('/fe/autenticacion/api/validacioncertificado', express.raw({ type: '*/*', limit: '10mb' }), validateCertificate);
 
 app.use('/api', authenticate, routes);
 
