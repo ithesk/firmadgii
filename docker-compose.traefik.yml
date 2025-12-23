@@ -1,0 +1,205 @@
+# =============================================================================
+# Docker Compose con Traefik Reverse Proxy
+# =============================================================================
+# Este archivo configura el microservicio DGII con Traefik para:
+# - SSL automático con Let's Encrypt
+# - Subdominios (ej: dgii.tudominio.com)
+# - Redirección HTTP → HTTPS
+#
+# REQUISITOS:
+# 1. Crear la red externa: docker network create proxy
+# 2. Configurar DNS: Apuntar tu subdominio al servidor
+# 3. Copiar .env.example a .env y configurar las variables
+#
+# USO:
+# docker-compose -f docker-compose.traefik.yml up -d
+# =============================================================================
+
+version: '3.8'
+
+services:
+  # ===========================================================================
+  # Traefik Reverse Proxy
+  # ===========================================================================
+  traefik:
+    image: traefik:v3.0
+    container_name: traefik
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/letsencrypt:/letsencrypt
+    command:
+      # API y Dashboard (opcional, comentar en producción)
+      - "--api.dashboard=true"
+      - "--api.insecure=false"
+
+      # Providers
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=proxy"
+
+      # Entrypoints
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+
+      # Redirección HTTP → HTTPS
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+
+      # Let's Encrypt
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-admin@example.com}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+
+      # Logs
+      - "--log.level=${TRAEFIK_LOG_LEVEL:-INFO}"
+    labels:
+      # Dashboard de Traefik (opcional)
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.rule=Host(`traefik.${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.traefik.entrypoints=websecure"
+      - "traefik.http.routers.traefik.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.traefik.service=api@internal"
+      # Autenticación básica para el dashboard (cambiar usuario:password)
+      # Generar con: htpasswd -nb admin password
+      - "traefik.http.routers.traefik.middlewares=traefik-auth"
+      - "traefik.http.middlewares.traefik-auth.basicauth.users=${TRAEFIK_DASHBOARD_AUTH:-admin:$$apr1$$xyz$$hash}"
+    networks:
+      - proxy
+
+  # ===========================================================================
+  # DGII e-CF Microservice
+  # ===========================================================================
+  dgii-microservice:
+    build: .
+    image: ${IMAGE_NAME:-dgii-ecf-microservice}:${IMAGE_TAG:-latest}
+    container_name: ${CONTAINER_NAME:-dgii-ecf-microservice}
+    restart: unless-stopped
+    # NO exponer puertos directamente - Traefik maneja el tráfico
+    # ports:
+    #   - "3000:3000"
+    environment:
+      # Server Configuration
+      PORT: 3000
+      NODE_ENV: ${NODE_ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      # DGII Configuration
+      DGII_ENVIRONMENT: ${DGII_ENVIRONMENT:-cert}
+
+      # Security
+      API_KEY: ${API_KEY:-change_me_in_production}
+
+      # Certificate Configuration
+      CERTIFICATE_PATH: ${CERTIFICATE_PATH:-/app/certificates/certificado.p12}
+      CERTIFICATE_PASSWORD: ${CERTIFICATE_PASSWORD}
+      CERTIFICATE_BASE64: ${CERTIFICATE_BASE64:-}
+
+      # Receptor Configuration
+      RNC_RECEPTOR: ${RNC_RECEPTOR:-}
+
+      # Odoo Integration (optional)
+      ODOO_WEBHOOK_URL: ${ODOO_WEBHOOK_URL:-}
+      ODOO_WEBHOOK_API_KEY: ${ODOO_WEBHOOK_API_KEY:-}
+    volumes:
+      - ${CERTIFICATES_PATH:-./certificates}:/app/certificates:ro
+      - ${LOGS_PATH:-./logs}:/app/logs
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    labels:
+      # Habilitar Traefik para este servicio
+      - "traefik.enable=true"
+
+      # Router principal
+      - "traefik.http.routers.dgii.rule=Host(`${DGII_SUBDOMAIN:-dgii}.${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.dgii.entrypoints=websecure"
+      - "traefik.http.routers.dgii.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.dgii.service=dgii"
+
+      # Servicio
+      - "traefik.http.services.dgii.loadbalancer.server.port=3000"
+
+      # Headers de seguridad (opcional)
+      - "traefik.http.routers.dgii.middlewares=dgii-headers"
+      - "traefik.http.middlewares.dgii-headers.headers.stsSeconds=31536000"
+      - "traefik.http.middlewares.dgii-headers.headers.stsIncludeSubdomains=true"
+      - "traefik.http.middlewares.dgii-headers.headers.forceSTSHeader=true"
+
+      # Watchtower auto-update
+      - "com.centurylinklabs.watchtower.enable=true"
+    networks:
+      - proxy
+    depends_on:
+      - traefik
+
+networks:
+  proxy:
+    external: true
+
+# =============================================================================
+# INSTRUCCIONES DE USO
+# =============================================================================
+#
+# 1. CREAR RED EXTERNA (solo una vez):
+#    docker network create proxy
+#
+# 2. CREAR DIRECTORIO PARA CERTIFICADOS SSL:
+#    mkdir -p traefik/letsencrypt
+#    touch traefik/letsencrypt/acme.json
+#    chmod 600 traefik/letsencrypt/acme.json
+#
+# 3. CONFIGURAR VARIABLES DE ENTORNO:
+#    Crear archivo .env con:
+#
+#    # Dominio principal
+#    DOMAIN=tudominio.com
+#    DGII_SUBDOMAIN=dgii
+#
+#    # Let's Encrypt
+#    ACME_EMAIL=tu@email.com
+#
+#    # Dashboard Traefik (opcional)
+#    # Generar hash: docker run --rm httpd:2.4-alpine htpasswd -nb admin tupassword
+#    TRAEFIK_DASHBOARD_AUTH=admin:$$apr1$$...
+#
+#    # API DGII
+#    API_KEY=tu_api_key_segura
+#    CERTIFICATE_PASSWORD=tu_password_certificado
+#    RNC_RECEPTOR=123456789
+#    DGII_ENVIRONMENT=cert
+#
+# 4. CONFIGURAR DNS:
+#    Crear registro A o CNAME apuntando dgii.tudominio.com a tu servidor
+#
+# 5. INICIAR SERVICIOS:
+#    docker-compose -f docker-compose.traefik.yml up -d
+#
+# 6. VERIFICAR:
+#    curl https://dgii.tudominio.com/health
+#
+# =============================================================================
+# AGREGAR ODOO U OTROS SERVICIOS
+# =============================================================================
+#
+# Para agregar Odoo al mismo Traefik, crear otro docker-compose o agregar:
+#
+#   odoo:
+#     image: odoo:17.0
+#     container_name: odoo
+#     labels:
+#       - "traefik.enable=true"
+#       - "traefik.http.routers.odoo.rule=Host(`ecf.${DOMAIN}`)"
+#       - "traefik.http.routers.odoo.entrypoints=websecure"
+#       - "traefik.http.routers.odoo.tls.certresolver=letsencrypt"
+#       - "traefik.http.services.odoo.loadbalancer.server.port=8069"
+#     networks:
+#       - proxy
+#
+# =============================================================================
