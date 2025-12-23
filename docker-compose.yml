@@ -3,18 +3,40 @@ version: '3.8'
 services:
   dgii-microservice:
     build: .
-    container_name: dgii-ecf-microservice
+    image: ${IMAGE_NAME:-dgii-ecf-microservice}:${IMAGE_TAG:-latest}
+    container_name: ${CONTAINER_NAME:-dgii-ecf-microservice}
     ports:
-      - "3000:3000"
+      - "${HOST_PORT:-3000}:3000"
     environment:
-      - NODE_ENV=production
-      - PORT=3000
-      - DGII_ENVIRONMENT=test
-    env_file:
-      - .env
+      # Server Configuration
+      PORT: 3000
+      NODE_ENV: ${NODE_ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      # DGII Configuration
+      DGII_ENVIRONMENT: ${DGII_ENVIRONMENT:-cert}
+
+      # Security
+      API_KEY: ${API_KEY:-change_me_in_production}
+
+      # Certificate Configuration
+      # Option 1: Mount certificate file (use CERTIFICATE_PATH)
+      CERTIFICATE_PATH: ${CERTIFICATE_PATH:-/app/certificates/certificado.p12}
+      CERTIFICATE_PASSWORD: ${CERTIFICATE_PASSWORD}
+      # Option 2: Use Base64 encoded certificate (for cloud deployments)
+      CERTIFICATE_BASE64: ${CERTIFICATE_BASE64:-}
+
+      # Receptor Configuration (for DGII Emisor-Receptor endpoints)
+      RNC_RECEPTOR: ${RNC_RECEPTOR:-}
+
+      # Odoo Integration (optional)
+      ODOO_WEBHOOK_URL: ${ODOO_WEBHOOK_URL:-}
+      ODOO_WEBHOOK_API_KEY: ${ODOO_WEBHOOK_API_KEY:-}
     volumes:
-      - ./certificates:/app/certificates:ro
-      - ./logs:/app/logs
+      # Mount certificates directory (read-only for security)
+      - ${CERTIFICATES_PATH:-./certificates}:/app/certificates:ro
+      # Mount logs directory for persistence
+      - ${LOGS_PATH:-./logs}:/app/logs
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health"]
@@ -22,3 +44,5 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
