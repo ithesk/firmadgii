@@ -141,21 +141,20 @@ services:
 
 networks:
   proxy:
-    external: true
+    driver: bridge
+    # Para usar red externa en lugar de crearla, descomentar y comentar 'driver: bridge':
+    # external: true
 
 # =============================================================================
 # INSTRUCCIONES DE USO
 # =============================================================================
 #
-# 1. CREAR RED EXTERNA (solo una vez):
-#    docker network create proxy
-#
-# 2. CREAR DIRECTORIO PARA CERTIFICADOS SSL:
+# 1. CREAR DIRECTORIO PARA CERTIFICADOS SSL (solo en servidor, no necesario en Portainer):
 #    mkdir -p traefik/letsencrypt
 #    touch traefik/letsencrypt/acme.json
 #    chmod 600 traefik/letsencrypt/acme.json
 #
-# 3. CONFIGURAR VARIABLES DE ENTORNO:
+# 2. CONFIGURAR VARIABLES DE ENTORNO (en Portainer usar la sección Environment):
 #    Crear archivo .env con:
 #
 #    # Dominio principal
@@ -175,13 +174,14 @@ networks:
 #    RNC_RECEPTOR=123456789
 #    DGII_ENVIRONMENT=cert
 #
-# 4. CONFIGURAR DNS:
+# 3. CONFIGURAR DNS:
 #    Crear registro A o CNAME apuntando dgii.tudominio.com a tu servidor
 #
-# 5. INICIAR SERVICIOS:
+# 4. INICIAR SERVICIOS:
 #    docker-compose -f docker-compose.traefik.yml up -d
+#    O en Portainer: Crear Stack y pegar este archivo
 #
-# 6. VERIFICAR:
+# 5. VERIFICAR:
 #    curl https://dgii.tudominio.com/health
 #
 # =============================================================================
