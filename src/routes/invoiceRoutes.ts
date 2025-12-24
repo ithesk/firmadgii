@@ -792,7 +792,17 @@ router.post('/void', invoiceController.voidSequence);
  * /api/invoice/customer-directory/{rnc}:
  *   get:
  *     summary: Directorio de Clientes
- *     description: Obtiene el directorio de URLs de servicio de un cliente autorizado
+ *     description: |
+ *       Consulta el directorio de URLs de servicio de un cliente autorizado en DGII.
+ *
+ *       Esto permite conocer las URLs donde enviar ECFs a otros receptores en el
+ *       flujo Emisor-Receptor.
+ *
+ *       **Parámetros:**
+ *       - `rnc` (path): El RNC del cliente que quieres consultar
+ *       - `certRnc` (query): RNC para cargar tu certificado de autenticación (opcional)
+ *
+ *       Si no especificas `certRnc`, se usa el certificado por defecto del servidor.
  *     tags: [Consultas]
  *     security:
  *       - ApiKeyAuth: []
@@ -802,15 +812,21 @@ router.post('/void', invoiceController.voidSequence);
  *         required: true
  *         schema:
  *           type: string
- *         description: RNC del cliente
- *         example: "123456789"
+ *         description: RNC del cliente a consultar en el directorio
+ *         example: "130939616"
+ *       - in: query
+ *         name: certRnc
+ *         schema:
+ *           type: string
+ *         description: RNC para cargar el certificado de autenticación (opcional, usa el por defecto si no se especifica)
+ *         example: "132493788"
  *       - in: query
  *         name: environment
  *         schema:
  *           type: string
  *           enum: [test, cert, prod]
  *         description: Ambiente de DGII
- *         example: "test"
+ *         example: "cert"
  *     responses:
  *       200:
  *         description: Directorio obtenido exitosamente
@@ -823,16 +839,8 @@ router.post('/void', invoiceController.voidSequence);
  *                   type: boolean
  *                   example: true
  *                 data:
- *                   type: array
- *                   items:
- *                     type: object
- *                     properties:
- *                       rnc:
- *                         type: string
- *                       urls:
- *                         type: array
- *                         items:
- *                           type: string
+ *                   type: object
+ *                   description: Información del directorio del cliente
  */
 router.get('/customer-directory/:rnc', invoiceController.getCustomerDirectory);
 

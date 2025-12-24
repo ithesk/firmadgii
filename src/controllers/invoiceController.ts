@@ -232,9 +232,11 @@ export const voidSequence = asyncHandler(async (req: Request, res: Response) => 
 
 export const getCustomerDirectory = asyncHandler(async (req: Request, res: Response) => {
   const { rnc } = req.params;
-  const { environment } = req.query as { environment?: string };
+  const { certRnc, environment } = req.query as { certRnc?: string; environment?: string };
 
-  const result = await dgiiService.getCustomerDirectory(rnc, environment);
+  // rnc = RNC a consultar en el directorio
+  // certRnc = RNC para cargar el certificado de autenticación (opcional)
+  const result = await dgiiService.getCustomerDirectory(rnc, certRnc, environment);
 
   const response: ApiResponse = {
     success: true,

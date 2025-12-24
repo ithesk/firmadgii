@@ -411,23 +411,52 @@ export class DGIIService {
     }
   }
 
-  async getCustomerDirectory(rnc: string, environment?: string): Promise<any> {
+  /**
+   * Consulta el directorio de URLs de servicio de un cliente autorizado en DGII
+   * Esto permite conocer las URLs donde enviar ECFs a otros receptores
+   *
+   * @param rncToQuery - El RNC del cliente que quieres consultar
+   * @param certRnc - RNC para cargar el certificado de autenticación (opcional, usa el por defecto)
+   * @param environment - Ambiente de DGII (test, cert, prod)
+   */
+  async getCustomerDirectory(rncToQuery: string, certRnc?: string, environment?: string): Promise<any> {
     try {
-      logger.info(`Getting customer directory for RNC: ${rnc}`);
+      logger.info(`Getting customer directory for RNC: ${rncToQuery}`);
 
-      const certs = certificateService.getCertificate(rnc);
+      // Usar el certificado especificado o el por defecto (no el RNC a consultar)
+      const certs = certificateService.getCertificate(certRnc);
       const env = this.getEnvironment(environment);
 
       const ecf = new ECF(certs, env);
       await ecf.authenticate();
 
-      const directory = await ecf.getCustomerDirectory(rnc);
+      const directory = await ecf.getCustomerDirectory(rncToQuery);
 
       logger.info('Customer directory retrieved successfully');
       return directory;
     } catch (error: any) {
-      logger.error('Error getting customer directory:', error);
-      throw new AppError(`Error getting customer directory: ${error.message}`, 500);
+      // Mejorar el mensaje de error para casos comunes
+      let errorMessage = error.message || 'Unknown error';
+
+      // Si el error contiene HTML de DGII (404, 500, etc.)
+      if (typeof error === 'string' && error.includes('<!DOCTYPE')) {
+        if (error.includes('404')) {
+          errorMessage = `RNC ${rncToQuery} no encontrado en el directorio de DGII. El contribuyente no está registrado como receptor de e-CF.`;
+        } else {
+          errorMessage = 'Error de comunicación con DGII. Intente nuevamente.';
+        }
+      } else if (error.response?.data) {
+        // Si es un error de axios con respuesta
+        const responseData = error.response.data;
+        if (typeof responseData === 'string' && responseData.includes('404')) {
+          errorMessage = `RNC ${rncToQuery} no encontrado en el directorio de DGII. El contribuyente no está registrado como receptor de e-CF.`;
+        } else {
+          errorMessage = typeof responseData === 'string' ? responseData : JSON.stringify(responseData);
+        }
+      }
+
+      logger.error('Error getting customer directory:', { error: errorMessage, rnc: rncToQuery });
+      throw new AppError(`Error getting customer directory: ${errorMessage}`, 500);
     }
   }
 
