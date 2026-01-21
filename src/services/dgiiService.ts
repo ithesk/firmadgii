@@ -1,4 +1,4 @@
-import ECF, { ENVIRONMENT, Signature, Transformer, generateEcfQRCodeURL, getCodeSixDigitfromSignature, SenderReceiver, ReceivedStatus, NoReceivedCode, CustomAuthentication } from 'dgii-ecf';
+import ECF, { ENVIRONMENT, Signature, Transformer, generateEcfQRCodeURL, generateFcQRCodeURL, getCodeSixDigitfromSignature, SenderReceiver, ReceivedStatus, NoReceivedCode, CustomAuthentication } from 'dgii-ecf';
 import axios from 'axios';
 import config from '../config/environment';
 import logger from '../utils/logger';
@@ -262,14 +262,11 @@ export class DGIIService {
 
       logger.info(`Summary with ECF sent successfully - TrackID: ${response?.trackId || 'unknown'}`);
 
-      // 4. Generar QR Code URL
-      const qrCodeUrl = generateEcfQRCodeURL(
+      // 4. Generar QR Code URL (usando FC para facturas de consumo)
+      const qrCodeUrl = generateFcQRCodeURL(
         rnc,
-        ecfEncabezado.Comprador?.RNCComprador || '',
         encf,
-        ecfEncabezado.Totales?.MontoTotal?.toString() || '0',
-        ecfEncabezado.Emisor?.FechaEmision || '',
-        new Date().toISOString(),
+        ecfEncabezado.Totales?.MontoTotal || 0,
         ecfSecurityCode,
         env
       );
@@ -647,8 +644,20 @@ export class DGIIService {
 
       let qrCodeUrl: string;
 
-      if (params.fechaEmision && params.fechaFirma) {
-        // Para facturas electrónicas (ECF)
+      // Detectar si es factura de consumo (E32) para usar el dominio correcto
+      const isFacturaConsumo = /E32/i.test(params.encf);
+
+      if (isFacturaConsumo) {
+        // Para facturas de consumo (FC) - usa fc.dgii.gov.do
+        qrCodeUrl = generateFcQRCodeURL(
+          params.rncEmisor,
+          params.encf,
+          params.montoTotal,
+          params.securityCode,
+          env
+        );
+      } else if (params.fechaEmision && params.fechaFirma) {
+        // Para facturas electrónicas (ECF) con fechas - usa ecf.dgii.gov.do
         qrCodeUrl = generateEcfQRCodeURL(
           params.rncEmisor,
           params.rncComprador || '',
@@ -660,7 +669,7 @@ export class DGIIService {
           env
         );
       } else {
-        // Para facturas de consumo (FC) - usando la librería dgii-ecf
+        // Para otros ECF sin fechas explícitas - usa ecf.dgii.gov.do
         qrCodeUrl = generateEcfQRCodeURL(
           params.rncEmisor,
           params.rncComprador || '',
