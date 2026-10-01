@@ -22,7 +22,7 @@ export interface SendInvoiceRequest {
 
 export interface SignXmlRequest {
   xmlData: string;
-  documentType: 'ECF' | 'ACECF' | 'ANECF' | 'RFCE' | 'ARECF';
+  documentType: string; // elemento raíz: ECF, RFCE, ACECF, ANECF, ARECF, Postulacion…
 }
 
 export interface AuthRequest {

@@ -40,7 +40,9 @@ export const schemas = {
 
   signXml: Joi.object({
     xmlData: Joi.string().required(),
-    documentType: Joi.string().valid('ECF', 'ACECF', 'ANECF', 'RFCE', 'ARECF').required(),
+    // ECF, RFCE, ACECF, ANECF, ARECF y los documentos de la certificación (Postulacion, declaración jurada…):
+    // es el nombre del elemento raíz del XML
+    documentType: Joi.string().pattern(/^[A-Za-z][A-Za-z0-9_]{1,40}$/).required(),
     rnc: Joi.string().optional(),
   }),
 
