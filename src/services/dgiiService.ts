@@ -10,6 +10,17 @@ import { DOMParser } from '@xmldom/xmldom';
 // Instancia del SenderReceiver para procesar ECFs recibidos
 const senderReceiver = new SenderReceiver();
 
+/** Mensaje útil de un error de la DGII: el cuerpo de la respuesta (mensajes de validación), no solo el código HTTP. */
+export const mensajeDgii = (error: any): string => {
+  const datos = error?.response?.data ?? error?.data;
+  if (datos) {
+    const texto = typeof datos === 'string' ? datos : JSON.stringify(datos);
+    // Las páginas de error HTML de la DGII no aportan: se resume
+    return /<!DOCTYPE|<html/i.test(texto) ? `HTTP ${error?.response?.status || ''} de la DGII` : texto.slice(0, 2000);
+  }
+  return error?.message || String(error);
+};
+
 /** Fecha y hora de firma como la pide la DGII (dd-MM-yyyy HH:mm:ss), en hora de Santo Domingo. */
 export const fechaHoraFirmaRD = (fecha: Date = new Date()): string => {
   const partes = new Intl.DateTimeFormat('en-GB', {
@@ -144,7 +155,7 @@ export class DGIIService {
       return { ...response, encf, tipo };
     } catch (error: any) {
       logger.error('Error sending signed document:', error);
-      throw new AppError(`Error sending signed document: ${error.message}`, 500);
+      throw new AppError(`Error sending signed document: ${mensajeDgii(error)}`, 500);
     }
   }
 
@@ -237,7 +248,7 @@ export class DGIIService {
       };
     } catch (error: any) {
       logger.error('Error sending invoice:', error);
-      throw new AppError(`Error sending invoice: ${error.message}`, 500);
+      throw new AppError(`Error sending invoice: ${mensajeDgii(error)}`, 500);
     }
   }
 
@@ -251,7 +262,7 @@ export class DGIIService {
       return status;
     } catch (error: any) {
       logger.error('Error getting status:', error);
-      throw new AppError(`Error getting status: ${error.message}`, 500);
+      throw new AppError(`Error getting status: ${mensajeDgii(error)}`, 500);
     }
   }
 
@@ -308,7 +319,7 @@ export class DGIIService {
       };
     } catch (error: any) {
       logger.error('Error sending summary:', error);
-      throw new AppError(`Error sending summary: ${error.message}`, 500);
+      throw new AppError(`Error sending summary: ${mensajeDgii(error)}`, 500);
     }
   }
 
