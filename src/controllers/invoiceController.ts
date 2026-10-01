@@ -6,8 +6,10 @@ import config from '../config/environment';
 
 export const signXml = asyncHandler(async (req: Request, res: Response) => {
   const { xmlData, documentType } = req.body as SignXmlRequest;
+  // rnc opcional: con varios certificados, firma con el de ese RNC
+  const { rnc } = req.body as { rnc?: string };
 
-  const result = await dgiiService.signXml(xmlData, documentType);
+  const result = await dgiiService.signXml(xmlData, documentType, rnc);
 
   const response: ApiResponse = {
     success: true,

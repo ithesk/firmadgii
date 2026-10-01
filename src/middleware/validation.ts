@@ -41,6 +41,7 @@ export const schemas = {
   signXml: Joi.object({
     xmlData: Joi.string().required(),
     documentType: Joi.string().valid('ECF', 'ACECF', 'ANECF', 'RFCE', 'ARECF').required(),
+    rnc: Joi.string().optional(),
   }),
 
   auth: Joi.object({
