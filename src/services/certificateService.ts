@@ -18,7 +18,9 @@ export class CertificateService {
         return this.certificates.get(cacheKey);
       }
 
-      const reader = new P12Reader(config.certificatePassword);
+      // Cada RNC puede tener su propia contraseña: CERTIFICATE_PASSWORD_<RNC>; si no, la general
+      const password = (rnc && process.env[`CERTIFICATE_PASSWORD_${rnc}`]) || config.certificatePassword;
+      const reader = new P12Reader(password);
       let certs: any;
 
       // Si hay certificado en Base64, usarlo primero (para cloud deployments)

@@ -242,6 +242,28 @@ router.post('/send', validateRequest(schemas.sendInvoice), invoiceController.sen
 
 /**
  * @swagger
+ * /api/invoice/prepare:
+ *   post:
+ *     summary: Firmar sin enviar (para imprimir el comprobante al momento)
+ *     description: Añade FechaHoraFirma (hora de Santo Domingo) si falta, firma el ECF y, si es consumo E32 menor de RD$250.000, prepara y firma también el RFCE. Devuelve código de seguridad, fecha de firma, XML firmados y URL del QR. El envío se hace después con /send-signed.
+ *     tags: [Invoice]
+ *     security: [{ ApiKeyAuth: [] }]
+ */
+router.post('/prepare', validateRequest(schemas.prepareInvoice), invoiceController.prepareInvoice);
+
+/**
+ * @swagger
+ * /api/invoice/send-signed:
+ *   post:
+ *     summary: Enviar a la DGII un documento ya firmado
+ *     description: tipo ECF (factura completa) o RFCE (resumen de consumo menor de RD$250.000).
+ *     tags: [Invoice]
+ *     security: [{ ApiKeyAuth: [] }]
+ */
+router.post('/send-signed', validateRequest(schemas.sendSigned), invoiceController.sendSigned);
+
+/**
+ * @swagger
  * /api/invoice/status/{trackId}:
  *   get:
  *     summary: Consultar Estado por TrackID

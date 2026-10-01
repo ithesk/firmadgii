@@ -10,7 +10,144 @@ import { DOMParser } from '@xmldom/xmldom';
 // Instancia del SenderReceiver para procesar ECFs recibidos
 const senderReceiver = new SenderReceiver();
 
+/** Fecha y hora de firma como la pide la DGII (dd-MM-yyyy HH:mm:ss), en hora de Santo Domingo. */
+export const fechaHoraFirmaRD = (fecha: Date = new Date()): string => {
+  const partes = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'America/Santo_Domingo', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }).formatToParts(fecha).reduce((acc: any, p) => ({ ...acc, [p.type]: p.value }), {});
+  return `${partes.day}-${partes.month}-${partes.year} ${partes.hour}:${partes.minute}:${partes.second}`;
+};
+
 export class DGIIService {
+  // Token de la DGII por RNC y ambiente: dura 1 hora, no hace falta pedirlo en cada documento
+  private tokens = new Map<string, { token: string; vence: number }>();
+
+  /** ECF autenticado, reutilizando el token mientras no esté por vencer. */
+  private async ecfAutenticado(rnc?: string, environment?: string, renovar = false): Promise<{ ecf: any; env: any }> {
+    const certs = certificateService.getCertificate(rnc);
+    const env = this.getEnvironment(environment);
+    const clave = `${rnc || 'default'}|${env}`;
+    const guardado = this.tokens.get(clave);
+    if (!renovar && guardado && guardado.vence > Date.now() + 2 * 60 * 1000) {
+      return { ecf: new ECF(certs, env, guardado.token), env };
+    }
+    const ecf = new ECF(certs, env);
+    const tokenData: any = await ecf.authenticate();
+    let vence = Date.parse(tokenData?.expira || '');
+    if (Number.isNaN(vence)) {
+      vence = Date.now() + 55 * 60 * 1000;
+    }
+    this.tokens.set(clave, { token: tokenData.token, vence });
+    return { ecf, env };
+  }
+
+  /** Ejecuta una llamada a la DGII; si el token fue rechazado (401), lo renueva y reintenta una vez. */
+  private async conDgii<T>(rnc: string | undefined, environment: string | undefined, llamada: (ecf: any, env: any) => Promise<T>): Promise<T> {
+    const { ecf, env } = await this.ecfAutenticado(rnc, environment);
+    try {
+      return await llamada(ecf, env);
+    } catch (error: any) {
+      const estado = error?.response?.status || error?.status;
+      if (estado !== 401 && !/401|unauthorized/i.test(String(error?.message || ''))) {
+        throw error;
+      }
+      const otro = await this.ecfAutenticado(rnc, environment, true);
+      return llamada(otro.ecf, otro.env);
+    }
+  }
+
+  /** Añade FechaHoraFirma al ECF si no la trae (al final del documento, como exige el formato). */
+  private conFechaFirma(invoiceData: InvoiceData): string {
+    const ecfData: any = (invoiceData as any).ECF;
+    if (ecfData && !ecfData.FechaHoraFirma) {
+      ecfData.FechaHoraFirma = fechaHoraFirmaRD();
+    }
+    return ecfData?.FechaHoraFirma || fechaHoraFirmaRD();
+  }
+
+  /** Resumen de factura de consumo (RFCE) a partir del encabezado del ECF ya firmado. */
+  private rfceDesdeEcf(encabezado: any, rnc: string, encf: string, codigoSeguridad: string): any {
+    const totalesEcf = encabezado.Totales || {};
+    // Totales que admite el RFCE, en el orden del formato; se copian los que traiga el ECF
+    const campos = ['MontoGravadoTotal', 'MontoGravadoI1', 'MontoGravadoI2', 'MontoGravadoI3', 'MontoExento',
+      'TotalITBIS', 'TotalITBIS1', 'TotalITBIS2', 'TotalITBIS3', 'MontoImpuestoAdicional', 'MontoTotal', 'MontoNoFacturable'];
+    const totales: any = {};
+    for (const campo of campos) {
+      if (totalesEcf[campo] !== undefined && totalesEcf[campo] !== null) {
+        totales[campo] = totalesEcf[campo];
+      }
+    }
+    totales.MontoPeriodo = totalesEcf.MontoTotal || 0;
+    return {
+      RFCE: {
+        Encabezado: {
+          Version: encabezado.Version || '1.0',
+          IdDoc: {
+            TipoeCF: 32,
+            eNCF: encabezado.IdDoc?.eNCF || encf,
+            TipoIngresos: encabezado.IdDoc?.TipoIngresos || '01',
+            TipoPago: encabezado.IdDoc?.TipoPago || 1,
+          },
+          Emisor: {
+            RNCEmisor: encabezado.Emisor?.RNCEmisor || rnc,
+            RazonSocialEmisor: encabezado.Emisor?.RazonSocialEmisor,
+            FechaEmision: encabezado.Emisor?.FechaEmision,
+          },
+          ...(encabezado.Comprador?.RNCComprador ? {
+            Comprador: {
+              RNCComprador: encabezado.Comprador.RNCComprador,
+              RazonSocialComprador: encabezado.Comprador.RazonSocialComprador,
+            },
+          } : {}),
+          Totales: totales,
+          CodigoSeguridadeCF: codigoSeguridad,
+        },
+      },
+    };
+  }
+
+  /**
+   * Firma sin enviar: lo usa Odoo para imprimir el comprobante al momento (código de seguridad, fecha de firma, QR)
+   * y enviarlo después con sendSigned. Para consumo E32 < RD$250.000 prepara además el RFCE.
+   */
+  async prepareInvoice(invoiceData: InvoiceData, rnc: string, encf: string, environment?: string): Promise<any> {
+    const encabezado: any = (invoiceData as any).ECF?.Encabezado;
+    if (!encabezado) {
+      throw new AppError('Invalid ECF data: missing Encabezado', 400);
+    }
+    const env = this.getEnvironment(environment);
+    const fechaHoraFirma = this.conFechaFirma(invoiceData);
+    const transformer = new Transformer();
+    const { signedXml, securityCode } = await this.signXml(transformer.json2xml(invoiceData), 'ECF', rnc);
+    const montoTotal = Number(encabezado.Totales?.MontoTotal || 0);
+    const esResumen = Number(encabezado.IdDoc?.TipoeCF) === 32 && montoTotal < 250000;
+    const resultado: any = { encf, securityCode, fechaHoraFirma, signedXml, tipoEnvio: esResumen ? 'RFCE' : 'ECF' };
+    if (esResumen) {
+      const rfce = this.rfceDesdeEcf(encabezado, rnc, encf, securityCode);
+      resultado.signedRfceXml = (await this.signXml(transformer.json2xml(rfce), 'RFCE', rnc)).signedXml;
+      resultado.qrCodeUrl = generateFcQRCodeURL(rnc, encf, montoTotal, securityCode, env);
+    } else {
+      resultado.qrCodeUrl = generateEcfQRCodeURL(rnc, encabezado.Comprador?.RNCComprador || '', encf,
+        String(encabezado.Totales?.MontoTotal), encabezado.Emisor?.FechaEmision, fechaHoraFirma, securityCode, env);
+    }
+    return resultado;
+  }
+
+  /** Envía a la DGII un documento ya firmado (ECF completo o RFCE). */
+  async sendSigned(signedXml: string, rnc: string, encf: string, tipo: 'ECF' | 'RFCE', environment?: string): Promise<any> {
+    try {
+      const archivo = `${rnc}${encf}.xml`;
+      logger.info(`Sending signed ${tipo} - RNC: ${rnc}, e-NCF: ${encf}`);
+      const response: any = await this.conDgii(rnc, environment, (ecf) =>
+        tipo === 'RFCE' ? ecf.sendSummary(signedXml, archivo) : ecf.sendElectronicDocument(signedXml, archivo));
+      return { ...response, encf, tipo };
+    } catch (error: any) {
+      logger.error('Error sending signed document:', error);
+      throw new AppError(`Error sending signed document: ${error.message}`, 500);
+    }
+  }
+
   private getEnvironment(env?: string): any {
     const environment = env || config.dgiiEnvironment;
     switch (environment) {
@@ -65,23 +202,18 @@ export class DGIIService {
     try {
       logger.info(`Sending invoice - RNC: ${rnc}, e-NCF: ${encf}`);
 
-      const certs = certificateService.getCertificate(rnc);
-      const env = this.getEnvironment(environment);
-
-      const ecf = new ECF(certs, env);
-      await ecf.authenticate();
-
+      const fechaFirma = this.conFechaFirma(invoiceData);
       const transformer = new Transformer();
       const xml = transformer.json2xml(invoiceData);
 
       const { signedXml, securityCode } = await this.signXml(xml, 'ECF', rnc);
 
-      const response = await ecf.sendElectronicDocument(signedXml, `${rnc}${encf}.xml`);
+      const env = this.getEnvironment(environment);
+      const response: any = await this.conDgii<any>(rnc, environment, (ecf) => ecf.sendElectronicDocument(signedXml, `${rnc}${encf}.xml`));
 
       const rncComprador = invoiceData.ECF?.Encabezado?.Comprador?.RNCComprador;
       const montoTotal = invoiceData.ECF?.Encabezado?.Totales?.MontoTotal;
       const fechaEmision = invoiceData.ECF?.Encabezado?.Emisor?.FechaEmision;
-      const fechaFirma = new Date().toISOString();
 
       const qrCodeUrl = generateEcfQRCodeURL(
         rnc,
@@ -100,6 +232,7 @@ export class DGIIService {
         ...response,
         signedXml,
         securityCode,
+        fechaHoraFirma: fechaFirma,
         qrCodeUrl,
       };
     } catch (error: any) {
@@ -112,13 +245,7 @@ export class DGIIService {
     try {
       logger.info(`Getting status for trackID: ${trackId}`);
 
-      const certs = certificateService.getCertificate(rnc);
-      const env = this.getEnvironment(environment);
-
-      const ecf = new ECF(certs, env);
-      await ecf.authenticate();
-
-      const status = await ecf.statusTrackId(trackId);
+      const status = await this.conDgii(rnc, environment, (ecf) => ecf.statusTrackId(trackId));
 
       logger.info(`Status retrieved successfully for trackID: ${trackId}`);
       return status;
@@ -132,13 +259,7 @@ export class DGIIService {
     try {
       logger.info(`Getting tracks for RNC: ${rnc}, e-NCF: ${encf}`);
 
-      const certs = certificateService.getCertificate(rnc);
-      const env = this.getEnvironment(environment);
-
-      const ecf = new ECF(certs, env);
-      await ecf.authenticate();
-
-      const tracks = await ecf.trackStatuses(rnc, encf);
+      const tracks = await this.conDgii(rnc, environment, (ecf) => ecf.trackStatuses(rnc, encf));
 
       logger.info(`Tracks retrieved successfully`);
       return tracks;
@@ -152,13 +273,7 @@ export class DGIIService {
     try {
       logger.info(`Inquiry status - RNC Emisor: ${rncEmisor}, e-NCF: ${encf}`);
 
-      const certs = certificateService.getCertificate(rncEmisor);
-      const env = this.getEnvironment(environment);
-
-      const ecf = new ECF(certs, env);
-      await ecf.authenticate();
-
-      const inquiry = await ecf.inquiryStatus(rncEmisor, encf, rncComprador, securityCode);
+      const inquiry = await this.conDgii(rncEmisor, environment, (ecf) => ecf.inquiryStatus(rncEmisor, encf, rncComprador, securityCode));
 
       logger.info('Inquiry completed successfully');
       return inquiry;
@@ -175,8 +290,7 @@ export class DGIIService {
       const certs = certificateService.getCertificate(rnc);
       const env = this.getEnvironment(environment);
 
-      const ecf = new ECF(certs, env);
-      await ecf.authenticate();
+      const { ecf } = await this.ecfAutenticado(rnc, environment);
 
       const transformer = new Transformer();
       const xml = transformer.json2xml(invoiceData);
@@ -205,8 +319,7 @@ export class DGIIService {
       const certs = certificateService.getCertificate(rnc);
       const env = this.getEnvironment(environment);
 
-      const ecf = new ECF(certs, env);
-      await ecf.authenticate();
+      const { ecf } = await this.ecfAutenticado(rnc, environment);
 
       const transformer = new Transformer();
 
@@ -220,39 +333,7 @@ export class DGIIService {
         throw new AppError('Invalid ECF data: missing Encabezado', 400);
       }
 
-      const rfceData = {
-        RFCE: {
-          Encabezado: {
-            Version: ecfEncabezado.Version || '1.0',
-            IdDoc: {
-              TipoeCF: 32,
-              eNCF: ecfEncabezado.IdDoc?.eNCF || encf,
-              TipoIngresos: ecfEncabezado.IdDoc?.TipoIngresos || '01',
-              TipoPago: ecfEncabezado.IdDoc?.TipoPago || 1,
-            },
-            Emisor: {
-              RNCEmisor: ecfEncabezado.Emisor?.RNCEmisor || rnc,
-              RazonSocialEmisor: ecfEncabezado.Emisor?.RazonSocialEmisor,
-              FechaEmision: ecfEncabezado.Emisor?.FechaEmision,
-            },
-            Comprador: {
-              RNCComprador: ecfEncabezado.Comprador?.RNCComprador,
-              RazonSocialComprador: ecfEncabezado.Comprador?.RazonSocialComprador,
-            },
-            Totales: {
-              MontoGravadoTotal: ecfEncabezado.Totales?.MontoGravadoTotal || 0,
-              MontoGravadoI1: ecfEncabezado.Totales?.MontoGravadoI1 || 0,
-              MontoExento: ecfEncabezado.Totales?.MontoExento || 0,
-              TotalITBIS: ecfEncabezado.Totales?.TotalITBIS || 0,
-              TotalITBIS1: ecfEncabezado.Totales?.TotalITBIS1 || 0,
-              MontoTotal: ecfEncabezado.Totales?.MontoTotal || 0,
-              MontoNoFacturable: ecfEncabezado.Totales?.MontoNoFacturable || 0,
-              MontoPeriodo: ecfEncabezado.Totales?.MontoTotal || 0,
-            },
-            CodigoSeguridadeCF: ecfSecurityCode,
-          },
-        },
-      };
+      const rfceData = this.rfceDesdeEcf(ecfEncabezado, rnc, encf, ecfSecurityCode);
 
       // 3. Firmar RFCE y enviar a DGII
       const rfceXml = transformer.json2xml(rfceData);
@@ -330,8 +411,7 @@ export class DGIIService {
 
       // En certificación DGII, el ARECF se envía al endpoint estándar de facturas
       // Nota: El endpoint /fe/recepcion/api/ecf no existe en DGII cert (404)
-      const ecf = new ECF(certs, env);
-      await ecf.authenticate();
+      const { ecf } = await this.ecfAutenticado(rnc, environment);
 
       logger.info(`Sending ARECF to DGII standard endpoint`);
 
@@ -357,8 +437,7 @@ export class DGIIService {
       const certs = certificateService.getCertificate(rnc);
       const env = this.getEnvironment(environment);
 
-      const ecf = new ECF(certs, env);
-      await ecf.authenticate();
+      const { ecf } = await this.ecfAutenticado(rnc, environment);
 
       const transformer = new Transformer();
       const xml = transformer.json2xml(approvalData);
@@ -386,8 +465,7 @@ export class DGIIService {
       const certs = certificateService.getCertificate(rnc);
       const env = this.getEnvironment(environment);
 
-      const ecf = new ECF(certs, env);
-      await ecf.authenticate();
+      const { ecf } = await this.ecfAutenticado(rnc, environment);
 
       const transformer = new Transformer();
       const xml = transformer.json2xml(voidData);
@@ -421,11 +499,7 @@ export class DGIIService {
       logger.info(`Getting customer directory for RNC: ${rncToQuery}`);
 
       // Usar el certificado especificado o el por defecto (no el RNC a consultar)
-      const certs = certificateService.getCertificate(certRnc);
-      const env = this.getEnvironment(environment);
-
-      const ecf = new ECF(certs, env);
-      await ecf.authenticate();
+      const { ecf } = await this.ecfAutenticado(certRnc, environment);
 
       const directory = await ecf.getCustomerDirectory(rncToQuery);
 
@@ -780,9 +854,7 @@ export class DGIIService {
       logger.info('ACECF signed, sending to DGII...');
 
       // Enviar a DGII
-      const certs = certificateService.getCertificate(rnc);
-      const env = this.getEnvironment(environment);
-      const ecf = new ECF(certs, env);
+      const { ecf } = await this.ecfAutenticado(rnc, environment);
 
       // Nombre del archivo: ACECF_RNCComprador_eNCF.xml
       const fileName = `ACECF_${data.rncComprador}_${data.eNCF}.xml`;

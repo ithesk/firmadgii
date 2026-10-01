@@ -139,10 +139,24 @@ export const sendInvoice = asyncHandler(async (req: Request, res: Response) => {
   res.json(response);
 });
 
+export const prepareInvoice = asyncHandler(async (req: Request, res: Response) => {
+  const { invoiceData, rnc, encf, environment } = req.body;
+  const result = await dgiiService.prepareInvoice(invoiceData, rnc, encf, environment);
+  res.json({ success: true, data: result } as ApiResponse);
+});
+
+export const sendSigned = asyncHandler(async (req: Request, res: Response) => {
+  const { signedXml, rnc, encf, tipo, environment } = req.body;
+  const result = await dgiiService.sendSigned(signedXml, rnc, encf, tipo, environment);
+  res.json({ success: true, data: result } as ApiResponse);
+});
+
 export const getStatus = asyncHandler(async (req: Request, res: Response) => {
   const { trackId } = req.params;
+  // Sin rnc/environment se usan el certificado y el ambiente por defecto del servicio
+  const { rnc, environment } = req.query as { rnc?: string; environment?: string };
 
-  const result = await dgiiService.getStatus(trackId);
+  const result = await dgiiService.getStatus(trackId, rnc, environment);
 
   const response: ApiResponse = {
     success: true,
@@ -154,8 +168,9 @@ export const getStatus = asyncHandler(async (req: Request, res: Response) => {
 
 export const getTracks = asyncHandler(async (req: Request, res: Response) => {
   const { rnc, encf } = req.params;
+  const { environment } = req.query as { environment?: string };
 
-  const result = await dgiiService.getTracks(rnc, encf);
+  const result = await dgiiService.getTracks(rnc, encf, environment);
 
   const response: ApiResponse = {
     success: true,

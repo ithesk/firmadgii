@@ -23,6 +23,21 @@ export const schemas = {
     environment: Joi.string().valid('test', 'cert', 'prod').optional(),
   }),
 
+  prepareInvoice: Joi.object({
+    invoiceData: Joi.object().required(),
+    rnc: Joi.string().required(),
+    encf: Joi.string().required(),
+    environment: Joi.string().valid('test', 'cert', 'prod').optional(),
+  }),
+
+  sendSigned: Joi.object({
+    signedXml: Joi.string().required(),
+    rnc: Joi.string().required(),
+    encf: Joi.string().required(),
+    tipo: Joi.string().valid('ECF', 'RFCE').required(),
+    environment: Joi.string().valid('test', 'cert', 'prod').optional(),
+  }),
+
   signXml: Joi.object({
     xmlData: Joi.string().required(),
     documentType: Joi.string().valid('ECF', 'ACECF', 'ANECF', 'RFCE', 'ARECF').required(),
