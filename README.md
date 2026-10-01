@@ -603,10 +603,10 @@ Un solo servicio para varias empresas. Cada una tiene su RNC, su certificado, **
 (que solo puede usar el certificado de su RNC) y el Odoo al que se avisan los documentos recibidos.
 
 ```bash
-node scripts/empresa.js alta 133524996 "MI EMPRESA SRL" cert /ruta/clave-del-certificado.txt
+node bin/empresa.js alta 133524996 "MI EMPRESA SRL" cert /ruta/clave-del-certificado.txt
 # → muestra UNA vez la clave de API; en config/empresas.json queda solo su SHA-256
-node scripts/empresa.js nueva-clave 133524996
-node scripts/empresa.js lista
+node bin/empresa.js nueva-clave 133524996
+node bin/empresa.js lista
 ```
 
 `config/empresas.json` (o `EMPRESAS_PATH`) admite por empresa: `certificado` (por defecto `certificates/<RNC>.p12`),
