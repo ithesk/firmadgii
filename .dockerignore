@@ -10,3 +10,8 @@ README.md
 *.md
 .vscode
 .idea
+certificates
+config/empresas.json
+scripts
+*.p12
+*.xlsx
