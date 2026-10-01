@@ -12,13 +12,20 @@ const senderReceiver = new SenderReceiver();
 
 /** Mensaje útil de un error de la DGII: el cuerpo de la respuesta (mensajes de validación), no solo el código HTTP. */
 export const mensajeDgii = (error: any): string => {
+  // dgii-ecf >= 1.8 lanza DgiiApiError con el detalle (estado HTTP, mensajes de validación, cuerpo)
+  const mensajes = Array.isArray(error?.mensajes) && error.mensajes.length
+    ? ' — ' + error.mensajes.map((m: any) => `${m.codigo ?? ''} ${m.valor ?? ''}`.trim()).join('; ')
+    : '';
   const datos = error?.response?.data ?? error?.data;
-  if (datos) {
+  let cuerpo = '';
+  if (!mensajes && datos) {
     const texto = typeof datos === 'string' ? datos : JSON.stringify(datos);
-    // Las páginas de error HTML de la DGII no aportan: se resume
-    return /<!DOCTYPE|<html/i.test(texto) ? `HTTP ${error?.response?.status || ''} de la DGII` : texto.slice(0, 2000);
+    cuerpo = /<!DOCTYPE|<html/i.test(texto) ? '' : ' — ' + texto;
   }
-  return error?.message || String(error);
+  const base = error?.message || String(error);
+  // Si el mensaje ya incluye el detalle, no se repite
+  const extra = [mensajes, cuerpo].filter((t) => t && !base.includes(t.replace(/^ — /, ''))).join('');
+  return `${base}${extra}`.slice(0, 2000);
 };
 
 /** Fecha y hora de firma como la pide la DGII (dd-MM-yyyy HH:mm:ss), en hora de Santo Domingo. */
