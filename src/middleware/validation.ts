@@ -46,6 +46,7 @@ export const schemas = {
 
   auth: Joi.object({
     environment: Joi.string().valid('test', 'cert', 'prod').optional(),
+    rnc: Joi.string().optional(),
   }),
 
   inquiry: Joi.object({
@@ -53,5 +54,8 @@ export const schemas = {
     encf: Joi.string().required(),
     rncComprador: Joi.string().optional(),
     securityCode: Joi.string().optional(),
+    // La autenticación multiempresa añade el RNC y el ambiente de la empresa
+    rnc: Joi.string().optional(),
+    environment: Joi.string().valid('test', 'cert', 'prod').optional(),
   }),
 };

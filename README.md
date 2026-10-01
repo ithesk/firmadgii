@@ -597,6 +597,36 @@ El microservicio selecciona automáticamente el certificado según el RNC en el 
 
 ---
 
+## 🏢 Multiempresa
+
+Un solo servicio para varias empresas. Cada una tiene su RNC, su certificado, **su propia clave de API**
+(que solo puede usar el certificado de su RNC) y el Odoo al que se avisan los documentos recibidos.
+
+```bash
+node scripts/empresa.js alta 133524996 "MI EMPRESA SRL" cert /ruta/clave-del-certificado.txt
+# → muestra UNA vez la clave de API; en config/empresas.json queda solo su SHA-256
+node scripts/empresa.js nueva-clave 133524996
+node scripts/empresa.js lista
+```
+
+`config/empresas.json` (o `EMPRESAS_PATH`) admite por empresa: `certificado` (por defecto `certificates/<RNC>.p12`),
+`claveCertificadoArchivo` o `claveCertificado`, `ambiente`, `odooWebhookUrl`, `odooWebhookApiKey`, `activa`.
+Se relee solo al cambiar. `API_KEY_ADMIN` (opcional) da acceso a todas. Sin archivo de empresas, el servicio
+funciona como antes con una sola `API_KEY`.
+
+URLs que cada empresa registra en su postulación ante la DGII (RNC delante):
+
+```
+https://<servicio>/<RNC>/fe/recepcion/api/ecf
+https://<servicio>/<RNC>/fe/aprobacioncomercial/api/ecf
+https://<servicio>/<RNC>/fe/autenticacion/api/semilla
+https://<servicio>/<RNC>/fe/autenticacion/api/validacioncertificado
+```
+
+Las llamadas a la DGII se hacen en fila dentro del proceso (dgii-ecf guarda el token en una cabecera global).
+
+---
+
 ## 📊 Logging
 
 Los logs se guardan en:

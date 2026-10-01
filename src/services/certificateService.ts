@@ -1,5 +1,6 @@
 import { P12Reader } from 'dgii-ecf';
 import config from '../config/environment';
+import { empresas } from '../config/empresas';
 import logger from '../utils/logger';
 import { AppError } from '../middleware/errorHandler';
 import fs from 'fs';
@@ -18,8 +19,10 @@ export class CertificateService {
         return this.certificates.get(cacheKey);
       }
 
-      // Cada RNC puede tener su propia contraseña: CERTIFICATE_PASSWORD_<RNC>; si no, la general
-      const password = (rnc && process.env[`CERTIFICATE_PASSWORD_${rnc}`]) || config.certificatePassword;
+      // Contraseña: la de la empresa (archivo de empresas), CERTIFICATE_PASSWORD_<RNC> o la general
+      const empresa = empresas.porRnc(rnc);
+      const password = empresas.claveCertificado(empresa)
+        || (rnc && process.env[`CERTIFICATE_PASSWORD_${rnc}`]) || config.certificatePassword;
       const reader = new P12Reader(password);
       let certs: any;
 
@@ -29,9 +32,9 @@ export class CertificateService {
         certs = reader.getKeyFromStringBase64(config.certificateBase64);
       } else {
         // Cargar desde archivo
-        const certificatePath = rnc
+        const certificatePath = empresa?.certificado || (rnc
           ? path.join(path.dirname(config.certificatePath), `${rnc}.p12`)
-          : config.certificatePath;
+          : config.certificatePath);
 
         if (!fs.existsSync(certificatePath)) {
           throw new AppError(`Certificate not found for RNC: ${rnc || 'default'}`, 404);

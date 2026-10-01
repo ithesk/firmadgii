@@ -52,3 +52,6 @@ resultados_*.json
 RESUMEN_FASE1.md
 SWAGGER_IMPLEMENTATION.md
 plan_implementacion.md
+
+# Multiempresa: claves (hash), certificados y contraseñas de cada empresa
+config/empresas.json

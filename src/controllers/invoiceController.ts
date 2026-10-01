@@ -311,8 +311,8 @@ export const receiveEcf = asyncHandler(async (req: Request, res: Response) => {
   const contentType = req.headers['content-type'] || '';
   const { rnc, accepted, rejectCode } = req.query as any;
 
-  // Usar rncReceptor del query param, o del config (variable de entorno RNC_RECEPTOR)
-  const rncReceptor = (req.query.rncReceptor as string) || config.rncReceptor;
+  // RNC receptor: el de la ruta /{RNC}/fe/... (multiempresa), el del query o RNC_RECEPTOR
+  const rncReceptor = req.params.rnc || (req.query.rncReceptor as string) || config.rncReceptor;
 
   if (!rncReceptor) {
     res.status(400).json({
@@ -539,7 +539,8 @@ export const getSeed = asyncHandler(async (req: Request, res: Response) => {
   console.log('Headers:', JSON.stringify(req.headers, null, 2));
   console.log('Query params:', JSON.stringify(req.query, null, 2));
 
-  const seedXml = dgiiService.generateSeed();
+  // Multiempresa: la semilla la genera el certificado de la empresa de la ruta /{RNC}/fe/...
+  const seedXml = dgiiService.generateSeed(req.params.rnc || (req.query.rnc as string) || undefined);
 
   console.log('Semilla generada:', seedXml);
   console.log('==========================================\n');
@@ -592,7 +593,7 @@ export const validateCertificate = asyncHandler(async (req: Request, res: Respon
   }
 
   try {
-    const token = await dgiiService.validateSignedSeed(signedSeedXml);
+    const token = await dgiiService.validateSignedSeed(signedSeedXml, req.params.rnc || (req.query.rnc as string) || undefined);
 
     console.log('Token generado:', token);
     console.log('==============================================\n');
@@ -683,6 +684,11 @@ export const receiveAcecf = asyncHandler(async (req: Request, res: Response) => 
       console.log(JSON.stringify(acecfInfo, null, 2));
 
       parsedData = acecfInfo;
+      // Avisar al Odoo de la empresa receptora (ruta /{RNC}/fe/aprobacioncomercial o RNC_RECEPTOR)
+      const rncReceptor = req.params.rnc || config.rncReceptor || acecfInfo.rncEmisor;
+      if (rncReceptor) {
+        dgiiService.notificarAprobacion(rncReceptor, bodyContent, acecfInfo);
+      }
     } catch (error) {
       console.log('Error parseando XML:', error);
     }

@@ -1,3 +1,4 @@
+import { empresas } from './config/empresas';
 import express from 'express';
 import cors from 'cors';
 import swaggerUi from 'swagger-ui-express';
@@ -124,6 +125,25 @@ app.get('/health', (req, res) => {
  * DGII envía el ECF como multipart/form-data y espera recibir el ARECF firmado como respuesta
  */
 app.post('/fe/recepcion/api/ecf', express.raw({ type: '*/*', limit: '10mb' }), receiveEcf);
+
+/**
+ * Multiempresa: las mismas URLs del estándar Emisor-Receptor, con el RNC de la empresa delante.
+ * Es la URL que cada empresa registra en su postulación ante la DGII, p. ej.
+ *   https://ecf.miservicio.com/133524996/fe/recepcion/api/ecf
+ * Solo responden los RNC dados de alta en el archivo de empresas.
+ */
+const empresaDeLaRuta = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (empresas.multiempresa() && !empresas.porRnc(req.params.rnc)) {
+    res.status(404).json({ success: false, error: 'RNC no registrado en este servicio' });
+    return;
+  }
+  next();
+};
+const RUTA_RNC = '/:rnc(\\d{9,11})';
+app.post(`${RUTA_RNC}/fe/recepcion/api/ecf`, empresaDeLaRuta, express.raw({ type: '*/*', limit: '10mb' }), receiveEcf);
+app.post(`${RUTA_RNC}/fe/aprobacioncomercial/api/ecf`, empresaDeLaRuta, express.raw({ type: '*/*', limit: '10mb' }), receiveAcecf);
+app.get(`${RUTA_RNC}/fe/autenticacion/api/semilla`, empresaDeLaRuta, getSeed);
+app.post(`${RUTA_RNC}/fe/autenticacion/api/validacioncertificado`, empresaDeLaRuta, express.raw({ type: '*/*', limit: '10mb' }), validateCertificate);
 
 /**
  * Endpoint para recibir Aprobaciones Comerciales (ACECF) (SIN AUTENTICACIÓN)

@@ -4,6 +4,7 @@ import config from '../config/environment';
 import logger from '../utils/logger';
 import { AppError } from '../middleware/errorHandler';
 import certificateService from './certificateService';
+import { empresas } from '../config/empresas';
 import { InvoiceData } from '../types';
 import { DOMParser } from '@xmldom/xmldom';
 
@@ -60,8 +61,22 @@ export class DGIIService {
     return { ecf, env };
   }
 
+  // dgii-ecf guarda el token en una cabecera global de axios: con varias empresas a la vez, dos llamadas
+  // podrían cruzar tokens. Se ejecutan en fila (una llamada a la DGII a la vez por proceso).
+  private fila: Promise<unknown> = Promise.resolve();
+
+  private enFila<T>(tarea: () => Promise<T>): Promise<T> {
+    const resultado = this.fila.then(tarea, tarea);
+    this.fila = resultado.catch(() => undefined);
+    return resultado;
+  }
+
   /** Ejecuta una llamada a la DGII; si el token fue rechazado (401), lo renueva y reintenta una vez. */
-  private async conDgii<T>(rnc: string | undefined, environment: string | undefined, llamada: (ecf: any, env: any) => Promise<T>): Promise<T> {
+  private conDgii<T>(rnc: string | undefined, environment: string | undefined, llamada: (ecf: any, env: any) => Promise<T>): Promise<T> {
+    return this.enFila(() => this.conDgiiSinFila(rnc, environment, llamada));
+  }
+
+  private async conDgiiSinFila<T>(rnc: string | undefined, environment: string | undefined, llamada: (ecf: any, env: any) => Promise<T>): Promise<T> {
     const { ecf, env } = await this.ecfAutenticado(rnc, environment);
     try {
       return await llamada(ecf, env);
@@ -188,7 +203,7 @@ export class DGIIService {
       const env = this.getEnvironment(environment);
 
       const ecf = new ECF(certs, env);
-      const tokenData = await ecf.authenticate();
+      const tokenData = await this.enFila(() => ecf.authenticate());
 
       logger.info('Authentication successful');
       return tokenData;
@@ -308,14 +323,13 @@ export class DGIIService {
       const certs = certificateService.getCertificate(rnc);
       const env = this.getEnvironment(environment);
 
-      const { ecf } = await this.ecfAutenticado(rnc, environment);
 
       const transformer = new Transformer();
       const xml = transformer.json2xml(invoiceData);
 
       const { signedXml, securityCode } = await this.signXml(xml, 'RFCE', rnc);
 
-      const response: any = await ecf.sendSummary(signedXml, `${rnc}${encf}.xml`);
+      const response: any = await this.conDgii<any>(rnc, environment, (ecf) => ecf.sendSummary(signedXml, `${rnc}${encf}.xml`));
 
       logger.info(`Summary sent successfully - TrackID: ${response?.trackId || 'unknown'}`);
 
@@ -337,7 +351,6 @@ export class DGIIService {
       const certs = certificateService.getCertificate(rnc);
       const env = this.getEnvironment(environment);
 
-      const { ecf } = await this.ecfAutenticado(rnc, environment);
 
       const transformer = new Transformer();
 
@@ -357,7 +370,7 @@ export class DGIIService {
       const rfceXml = transformer.json2xml(rfceData);
       const { signedXml: signedRfceXml, securityCode: rfceSecurityCode } = await this.signXml(rfceXml, 'RFCE', rnc);
 
-      const response: any = await ecf.sendSummary(signedRfceXml, `${rnc}${encf}.xml`);
+      const response: any = await this.conDgii<any>(rnc, environment, (ecf) => ecf.sendSummary(signedRfceXml, `${rnc}${encf}.xml`));
 
       logger.info(`Summary with ECF sent successfully - TrackID: ${response?.trackId || 'unknown'}`);
 
@@ -429,12 +442,11 @@ export class DGIIService {
 
       // En certificación DGII, el ARECF se envía al endpoint estándar de facturas
       // Nota: El endpoint /fe/recepcion/api/ecf no existe en DGII cert (404)
-      const { ecf } = await this.ecfAutenticado(rnc, environment);
 
       logger.info(`Sending ARECF to DGII standard endpoint`);
 
       // Enviar al endpoint estándar de DGII
-      const response: any = await ecf.sendElectronicDocument(signedXml, fileName);
+      const response: any = await this.conDgii<any>(rnc, environment, (ecf) => ecf.sendElectronicDocument(signedXml, fileName));
 
       logger.info(`Receipt sent successfully - TrackID: ${response?.trackId || 'unknown'}`);
       return {
@@ -455,14 +467,13 @@ export class DGIIService {
       const certs = certificateService.getCertificate(rnc);
       const env = this.getEnvironment(environment);
 
-      const { ecf } = await this.ecfAutenticado(rnc, environment);
 
       const transformer = new Transformer();
       const xml = transformer.json2xml(approvalData);
 
       const { signedXml } = await this.signXml(xml, 'ACECF', rnc);
 
-      const response: any = await ecf.sendCommercialApproval(signedXml, fileName);
+      const response: any = await this.conDgii<any>(rnc, environment, (ecf) => ecf.sendCommercialApproval(signedXml, fileName));
 
       logger.info(`Approval sent successfully - TrackID: ${response?.trackId || 'unknown'}`);
 
@@ -483,14 +494,13 @@ export class DGIIService {
       const certs = certificateService.getCertificate(rnc);
       const env = this.getEnvironment(environment);
 
-      const { ecf } = await this.ecfAutenticado(rnc, environment);
 
       const transformer = new Transformer();
       const xml = transformer.json2xml(voidData);
 
       const { signedXml } = await this.signXml(xml, 'ANECF', rnc);
 
-      const response: any = await ecf.voidENCF(signedXml, fileName);
+      const response: any = await this.conDgii<any>(rnc, environment, (ecf) => ecf.voidENCF(signedXml, fileName));
 
       logger.info(`Void sequence sent successfully - TrackID: ${response?.trackId || 'unknown'}`);
 
@@ -517,9 +527,8 @@ export class DGIIService {
       logger.info(`Getting customer directory for RNC: ${rncToQuery}`);
 
       // Usar el certificado especificado o el por defecto (no el RNC a consultar)
-      const { ecf } = await this.ecfAutenticado(certRnc, environment);
 
-      const directory = await ecf.getCustomerDirectory(rncToQuery);
+      const directory = await this.conDgii<any>(certRnc, environment, (ecf) => ecf.getCustomerDirectory(rncToQuery));
 
       logger.info('Customer directory retrieved successfully');
       return directory;
@@ -595,25 +604,32 @@ export class DGIIService {
    * Envía la información de recepción al webhook de Odoo
    */
   private async notifyOdoo(data: {
-    ecfXmlReceived: string;
-    arecfXmlSigned: string;
+    tipo?: 'ecf' | 'acecf';
+    rncReceptor?: string;
+    ecfXmlReceived?: string;
+    arecfXmlSigned?: string;
+    acecfXml?: string;
     ecfInfo: any;
-    arecfStatus: string;
+    arecfStatus?: string;
     arecfRejectCode?: string;
     timestamp: string;
   }): Promise<void> {
-    if (!config.odooWebhookUrl) {
-      logger.info('ODOO_WEBHOOK_URL not configured, skipping Odoo notification');
+    // Cada empresa avisa a su propio Odoo; sin archivo de empresas, al de ODOO_WEBHOOK_URL
+    const empresa = empresas.porRnc(data.rncReceptor);
+    const url = empresa?.odooWebhookUrl || config.odooWebhookUrl;
+    const clave = empresa ? empresa.odooWebhookApiKey : config.odooWebhookApiKey;
+    if (!url) {
+      logger.info(`No Odoo webhook for RNC ${data.rncReceptor || '-'}, skipping notification`);
       return;
     }
 
     try {
-      logger.info(`Sending reception data to Odoo: ${config.odooWebhookUrl}`);
+      logger.info(`Sending reception data to Odoo: ${url}`);
 
-      const response = await axios.post(config.odooWebhookUrl, data, {
+      const response = await axios.post(url, { tipo: 'ecf', ...data }, {
         headers: {
           'Content-Type': 'application/json',
-          ...(config.odooWebhookApiKey && { 'x-api-key': config.odooWebhookApiKey }),
+          ...(clave && { 'x-api-key': clave }),
         },
         timeout: 10000, // 10 segundos timeout
       });
@@ -653,7 +669,8 @@ export class DGIIService {
       logger.debug('Generated ARECF XML:', arecfXml);
 
       // Firmar el ARECF con nuestro certificado
-      const { signedXml } = await this.signXml(arecfXml, 'ARECF', rnc);
+      // El acuse lo firma el receptor: con su certificado
+      const { signedXml } = await this.signXml(arecfXml, 'ARECF', rnc || rncReceptor);
 
       logger.info('ARECF signed successfully');
 
@@ -663,6 +680,8 @@ export class DGIIService {
 
       // Enviar notificación a Odoo (en background, no bloquea la respuesta)
       this.notifyOdoo({
+        tipo: 'ecf',
+        rncReceptor,
         ecfXmlReceived: ecfXml,
         arecfXmlSigned: signedXml,
         ecfInfo,
@@ -872,12 +891,11 @@ export class DGIIService {
       logger.info('ACECF signed, sending to DGII...');
 
       // Enviar a DGII
-      const { ecf } = await this.ecfAutenticado(rnc, environment);
 
       // Nombre del archivo: ACECF_RNCComprador_eNCF.xml
       const fileName = `ACECF_${data.rncComprador}_${data.eNCF}.xml`;
 
-      const response = await ecf.sendCommercialApproval(signedXml, fileName);
+      const response = await this.conDgii<any>(rnc, environment, (ecf) => ecf.sendCommercialApproval(signedXml, fileName));
 
       logger.info('Commercial approval sent successfully');
 
@@ -961,6 +979,12 @@ export class DGIIService {
    * @param rnc - RNC para cargar el certificado (opcional)
    * @returns XML de la semilla
    */
+  /** Aprobación comercial (ACECF) recibida de un cliente: se avisa al Odoo de la empresa receptora. */
+  notificarAprobacion(rncReceptor: string, acecfXml: string, info: any): void {
+    this.notifyOdoo({ tipo: 'acecf', rncReceptor, acecfXml, ecfInfo: info, timestamp: new Date().toISOString() })
+      .catch((err) => logger.error('Background Odoo notification (ACECF) failed:', err));
+  }
+
   generateSeed(rnc?: string): string {
     try {
       logger.info('Generating authentication seed');
