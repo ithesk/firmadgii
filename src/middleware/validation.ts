@@ -4,7 +4,14 @@ import { AppError } from './errorHandler';
 
 export const validateRequest = (schema: any) => {
   return (req: Request, res: Response, next: NextFunction) => {
-    const { error } = schema.validate(req.body, { abortEarly: false });
+    // La autenticación multiempresa añade rnc y environment de la empresa: se admiten en cualquier ruta
+    // (solo si el esquema no los define ya, para no relajar un rnc obligatorio)
+    const propias = schema.type === 'object' ? Object.keys(schema.describe().keys || {}) : null;
+    const extra: Record<string, any> = {};
+    if (propias && !propias.includes('rnc')) extra.rnc = Joi.string().optional();
+    if (propias && !propias.includes('environment')) extra.environment = Joi.string().valid('test', 'cert', 'prod').optional();
+    const conEmpresa = Object.keys(extra).length ? schema.keys(extra) : schema;
+    const { error } = conEmpresa.validate(req.body, { abortEarly: false });
 
     if (error) {
       const errorMessage = error.details.map((detail: any) => detail.message).join(', ');
