@@ -1,0 +1,42 @@
+# =============================================================================
+# Stack de Portainer: servicio e-CF multiempresa
+# =============================================================================
+# Portainer → Stacks → Add stack → Web editor: pegar este archivo.
+# La imagen ecf-servicio:latest se construye en el servidor:
+#   cd /opt/ecf-servicio/app && docker build -t ecf-servicio:latest .
+# Para actualizar el código: reconstruir la imagen y, en Portainer, "Update the stack".
+#
+# Carpetas del servidor:
+#   /opt/ecf-servicio/config/empresas.json    empresas (alta: docker exec ecf-servicio node bin/empresa.js alta ...)
+#   /opt/ecf-servicio/config/<RNC>.clave      clave del certificado de cada empresa
+#   /opt/ecf-servicio/certificates/<RNC>.p12  certificado de cada empresa
+# Sin puertos públicos: Nginx Proxy Manager llega por la red proxy_reverse_default (host ecf-servicio:3000).
+# =============================================================================
+services:
+  ecf-servicio:
+    image: ecf-servicio:latest
+    container_name: ecf-servicio
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DGII_ENVIRONMENT: ${DGII_ENVIRONMENT:-cert}
+      EMPRESAS_PATH: /app/config/empresas.json
+      CERTIFICATE_PATH: /app/certificates/default.p12
+      # Solo se usa mientras no haya empresas dadas de alta; poner un valor largo al azar
+      API_KEY: ${API_KEY}
+      # Opcional: clave con acceso a todas las empresas
+      API_KEY_ADMIN: ${API_KEY_ADMIN:-}
+    volumes:
+      - /opt/ecf-servicio/config:/app/config
+      - /opt/ecf-servicio/certificates:/app/certificates:ro
+      - /opt/ecf-servicio/logs:/app/logs
+    networks:
+      - proxy_reverse_default
+
+networks:
+  proxy_reverse_default:
+    external: true
