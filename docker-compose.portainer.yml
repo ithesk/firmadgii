@@ -1,10 +1,9 @@
 # =============================================================================
 # Stack de Portainer: servicio e-CF multiempresa
 # =============================================================================
-# Portainer → Stacks → Add stack → Web editor: pegar este archivo.
-# La imagen ecf-servicio:latest se construye en el servidor:
-#   cd /opt/ecf-servicio/app && docker build -t ecf-servicio:latest .
-# Para actualizar el código: reconstruir la imagen y, en Portainer, "Update the stack".
+# Portainer → Stacks → Add stack → Repository:
+#   URL https://github.com/ithesk/firmadgii, rama la que se despliega, compose: docker-compose.portainer.yml
+#   GitOps updates activado (polling o webhook) y "Force redeployment": cada push se reconstruye y despliega.
 #
 # Carpetas del servidor:
 #   /opt/ecf-servicio/config/empresas.json    empresas (alta: docker exec ecf-servicio node bin/empresa.js alta ...)
@@ -14,6 +13,7 @@
 # =============================================================================
 services:
   ecf-servicio:
+    build: .
     image: ecf-servicio:latest
     container_name: ecf-servicio
     restart: unless-stopped
