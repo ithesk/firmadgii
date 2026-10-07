@@ -309,7 +309,10 @@ export const sendSummaryWithEcf = asyncHandler(async (req: Request, res: Respons
  */
 export const receiveEcf = asyncHandler(async (req: Request, res: Response) => {
   const contentType = req.headers['content-type'] || '';
-  const { rnc, accepted, rejectCode } = req.query as any;
+  const { accepted, rejectCode } = req.query as any;
+  // En la ruta pública /{RNC}/fe/... el certificado es siempre el de esa empresa:
+  // nunca se acepta ?rnc= del exterior (firmaría con el certificado de otra)
+  const rnc = req.params.rnc || (req.query.rnc as string | undefined);
 
   // RNC receptor: el de la ruta /{RNC}/fe/... (multiempresa), el del query o RNC_RECEPTOR
   const rncReceptor = req.params.rnc || (req.query.rncReceptor as string) || config.rncReceptor;
