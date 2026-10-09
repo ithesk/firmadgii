@@ -16,6 +16,9 @@ services:
   ecf-servicio:
     build: .
     image: ecf-servicio:latest
+    # Construir siempre desde el repositorio: sin esto, la actualización GitOps de Portainer intenta descargar
+    # la imagen de un registro (no existe) y no despliega los cambios
+    pull_policy: build
     container_name: ecf-servicio
     restart: unless-stopped
     expose:
