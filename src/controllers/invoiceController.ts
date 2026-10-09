@@ -3,6 +3,8 @@ import dgiiService from '../services/dgiiService';
 import { ApiResponse, SendInvoiceRequest, SignXmlRequest, InquiryRequest } from '../types';
 import { asyncHandler } from '../middleware/errorHandler';
 import config from '../config/environment';
+import logger from '../utils/logger';
+import { bandeja } from '../services/bandeja';
 
 export const signXml = asyncHandler(async (req: Request, res: Response) => {
   const { xmlData, documentType } = req.body as SignXmlRequest;
@@ -537,18 +539,10 @@ export const processAcecfFromEcf = asyncHandler(async (req: Request, res: Respon
  * que debe firmar con su certificado y enviar a validacioncertificado
  */
 export const getSeed = asyncHandler(async (req: Request, res: Response) => {
-  console.log('\n========== SEMILLA SOLICITADA ==========');
-  console.log('Timestamp:', new Date().toISOString());
-  console.log('Headers:', JSON.stringify(req.headers, null, 2));
-  console.log('Query params:', JSON.stringify(req.query, null, 2));
-
   // Multiempresa: la semilla la genera el certificado de la empresa de la ruta /{RNC}/fe/...
-  const seedXml = dgiiService.generateSeed(req.params.rnc || (req.query.rnc as string) || undefined);
-
-  console.log('Semilla generada:', seedXml);
-  console.log('==========================================\n');
-
-  // Responder con el XML de la semilla
+  const rnc = req.params.rnc || (req.query.rnc as string) || undefined;
+  logger.info(`Semilla solicitada para ${rnc || '-'} desde ${req.ip}`);
+  const seedXml = dgiiService.generateSeed(rnc);
   res.set('Content-Type', 'application/xml');
   res.send(seedXml);
 });
@@ -557,119 +551,68 @@ export const getSeed = asyncHandler(async (req: Request, res: Response) => {
  * Endpoint para validar certificado/semilla firmada
  * Path: /fe/autenticacion/api/validacioncertificado
  *
- * El emisor envía la semilla firmada y recibe un token de autenticación
+ * El emisor envía la semilla firmada y recibe un token de autenticación.
+ * No se registra ni la semilla ni el token: el token da acceso a la recepción.
  */
 export const validateCertificate = asyncHandler(async (req: Request, res: Response) => {
-  const contentType = req.headers['content-type'] || '';
-
-  console.log('\n========== VALIDACIÓN CERTIFICADO ==========');
-  console.log('Timestamp:', new Date().toISOString());
-  console.log('Content-Type:', contentType);
-  console.log('Headers:', JSON.stringify(req.headers, null, 2));
-  console.log('Query params:', JSON.stringify(req.query, null, 2));
-
   let signedSeedXml: string;
-
   if (req.body instanceof Buffer) {
     signedSeedXml = req.body.toString('utf-8');
-    console.log('Body (Buffer -> String):', signedSeedXml);
   } else if (typeof req.body === 'string') {
     signedSeedXml = req.body;
-    console.log('Body (String):', signedSeedXml);
   } else if (typeof req.body === 'object' && req.body.signedSeedXml) {
     signedSeedXml = req.body.signedSeedXml;
-    console.log('Body (JSON signedSeedXml):', signedSeedXml);
   } else {
     signedSeedXml = String(req.body);
-    console.log('Body (Other):', signedSeedXml);
   }
 
-  // Verificar que contiene XML firmado
   if (!signedSeedXml || !signedSeedXml.includes('<?xml') && !signedSeedXml.includes('<SemillaModel')) {
-    console.log('Error: XML de semilla firmada no proporcionado');
-    console.log('==============================================\n');
-    res.status(400).json({
-      success: false,
-      error: 'Signed seed XML is required',
-    });
+    logger.info(`Validación de certificado sin semilla firmada desde ${req.ip}`);
+    res.status(400).json({ success: false, error: 'Signed seed XML is required' });
     return;
   }
 
+  const rnc = req.params.rnc || (req.query.rnc as string) || undefined;
   try {
-    const token = await dgiiService.validateSignedSeed(signedSeedXml, req.params.rnc || (req.query.rnc as string) || undefined);
-
-    console.log('Token generado:', token);
-    console.log('==============================================\n');
-
-    // Responder con el token (formato que espera DGII)
+    const token = await dgiiService.validateSignedSeed(signedSeedXml, rnc);
+    logger.info(`Token emitido para ${rnc || '-'} a ${req.ip}`);
     res.json({
       token,
       expira: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24 horas
     });
   } catch (error: any) {
-    console.log('Error validando semilla:', error.message);
-    console.log('==============================================\n');
-
-    res.status(401).json({
-      success: false,
-      error: 'Invalid signed seed: ' + error.message,
-    });
+    logger.warn(`Semilla firmada no válida para ${rnc || '-'} desde ${req.ip}: ${error.message}`);
+    res.status(401).json({ success: false, error: 'Invalid signed seed: ' + error.message });
   }
 });
 
 /**
  * Endpoint receptor para recibir ACECFs (Aprobación Comercial)
- * Este endpoint loguea todo lo que recibe para análisis
  * Path: /fe/aprobacioncomercial/api/ecf
+ *
+ * Guarda la aprobación en la bandeja de la empresa (Odoo la recoge) y responde 200.
  */
 export const receiveAcecf = asyncHandler(async (req: Request, res: Response) => {
   const contentType = req.headers['content-type'] || '';
-
-  console.log('\n========== ACECF RECIBIDO ==========');
-  console.log('Timestamp:', new Date().toISOString());
-  console.log('Content-Type:', contentType);
-  console.log('Headers:', JSON.stringify(req.headers, null, 2));
-  console.log('Query params:', JSON.stringify(req.query, null, 2));
-
   let bodyContent: string;
   let parsedData: any = null;
 
   if (req.body instanceof Buffer) {
     bodyContent = req.body.toString('utf-8');
-    console.log('Body (Buffer -> String):', bodyContent);
   } else if (typeof req.body === 'string') {
     bodyContent = req.body;
-    console.log('Body (String):', bodyContent);
   } else if (typeof req.body === 'object') {
-    bodyContent = JSON.stringify(req.body, null, 2);
-    console.log('Body (Object):', bodyContent);
+    bodyContent = JSON.stringify(req.body);
     parsedData = req.body;
   } else {
     bodyContent = String(req.body);
-    console.log('Body (Other):', bodyContent);
   }
 
-  // Si es multipart, intentar parsear
-  if (contentType.includes('multipart/form-data')) {
-    console.log('\n--- Detectado multipart/form-data ---');
-    console.log('Body raw length:', bodyContent.length);
-    console.log('Body raw (primeros 2000 chars):', bodyContent.substring(0, 2000));
-  }
-
-  // Si contiene XML, intentar extraer información del ACECF
   if (bodyContent.includes('<?xml') || bodyContent.includes('<ACECF')) {
-    console.log('\n--- Detectado XML de ACECF ---');
-
     try {
-      // Extraer información del ACECF usando DOMParser
       const { DOMParser } = await import('@xmldom/xmldom');
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(bodyContent, 'text/xml');
-
-      const getTextContent = (tagName: string): string => {
-        const element = doc.getElementsByTagName(tagName)[0];
-        return element?.textContent || '';
-      };
+      const doc = new DOMParser().parseFromString(bodyContent, 'text/xml');
+      const getTextContent = (tagName: string): string => doc.getElementsByTagName(tagName)[0]?.textContent || '';
 
       const acecfInfo = {
         version: getTextContent('Version'),
@@ -682,29 +625,49 @@ export const receiveAcecf = asyncHandler(async (req: Request, res: Response) => 
         detalleMotivoRechazo: getTextContent('DetalleMotivoRechazo'),
         fechaHoraAprobacionComercial: getTextContent('FechaHoraAprobacionComercial'),
       };
-
-      console.log('\n--- Datos extraídos del ACECF ---');
-      console.log(JSON.stringify(acecfInfo, null, 2));
-
       parsedData = acecfInfo;
-      // Avisar al Odoo de la empresa receptora (ruta /{RNC}/fe/aprobacioncomercial o RNC_RECEPTOR)
+      logger.info(`ACECF recibido desde ${req.ip}: ${acecfInfo.eNCF} de ${acecfInfo.rncComprador}, estado ${acecfInfo.estado}`);
+      // Para la empresa de la ruta /{RNC}/fe/aprobacioncomercial (o RNC_RECEPTOR): el emisor del e-CF aprobado
       const rncReceptor = req.params.rnc || config.rncReceptor || acecfInfo.rncEmisor;
       if (rncReceptor) {
         dgiiService.notificarAprobacion(rncReceptor, bodyContent, acecfInfo);
       }
-    } catch (error) {
-      console.log('Error parseando XML:', error);
+    } catch (error: any) {
+      logger.error(`ACECF no válido desde ${req.ip}: ${error.message}`);
     }
+  } else {
+    logger.warn(`Aprobación comercial sin XML desde ${req.ip} (${contentType})`);
   }
 
-  console.log('====================================\n');
-
-  // Responder con éxito y los datos parseados
   res.json({
     success: true,
     message: 'ACECF recibido correctamente',
     timestamp: new Date().toISOString(),
-    contentType,
     parsedData,
   });
+});
+
+/** Entrega un e-CF firmado al comprador (si es receptor electrónico) y devuelve su acuse. */
+export const deliverToBuyer = asyncHandler(async (req: Request, res: Response) => {
+  const { signedXml, encf, rncComprador, rnc, environment } = req.body;
+  if (!signedXml || !encf || !rncComprador) {
+    res.status(400).json({ success: false, error: 'signedXml, encf y rncComprador son obligatorios' });
+    return;
+  }
+  const result = await dgiiService.entregarAlComprador(signedXml, encf, String(rncComprador), rnc, environment);
+  res.json({ success: true, data: result } as ApiResponse);
+});
+
+/** Bandeja: documentos recibidos para la empresa de la clave que Odoo aún no recogió. */
+export const listarBandeja = asyncHandler(async (req: Request, res: Response) => {
+  const rnc = String(req.query.rnc || '');
+  const limite = parseInt(String(req.query.limit || '50'), 10) || 50;
+  res.json({ success: true, data: { documentos: bandeja.listar(rnc, limite) } } as ApiResponse);
+});
+
+/** Bandeja: Odoo confirma lo que ya procesó (pasa a entregados). */
+export const confirmarBandeja = asyncHandler(async (req: Request, res: Response) => {
+  const rnc = String(req.body.rnc || '');
+  const ids = Array.isArray(req.body.ids) ? req.body.ids.map(String) : [];
+  res.json({ success: true, data: { confirmados: bandeja.confirmar(rnc, ids) } } as ApiResponse);
 });

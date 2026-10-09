@@ -7,6 +7,7 @@ import certificateService from './certificateService';
 import { empresas } from '../config/empresas';
 import { InvoiceData } from '../types';
 import { DOMParser } from '@xmldom/xmldom';
+import { bandeja, extraerXml } from './bandeja';
 
 // Instancia del SenderReceiver para procesar ECFs recibidos
 const senderReceiver = new SenderReceiver();
@@ -477,9 +478,22 @@ export class DGIIService {
 
       logger.info(`Approval sent successfully - TrackID: ${response?.trackId || 'unknown'}`);
 
+      // La aprobación se informa a la DGII y también al emisor del e-CF (a su URL de aprobación comercial)
+      const rncEmisor = approvalData?.ACECF?.DetalleAprobacionComercial?.RNCEmisor;
+      let entregaEmisor: any = { entregado: false, motivo: 'Sin RNC del emisor' };
+      if (rncEmisor && String(rncEmisor) !== String(rnc)) {
+        try {
+          entregaEmisor = await this.entregarAprobacionAlEmisor(signedXml, fileName, String(rncEmisor), rnc as string, environment);
+        } catch (err: any) {
+          logger.warn(`Aprobación ${fileName} no entregada al emisor ${rncEmisor}: ${err.message}`);
+          entregaEmisor = { entregado: false, motivo: err.message };
+        }
+      }
+
       return {
         ...response,
         signedXml,
+        entregaEmisor,
       };
     } catch (error: any) {
       logger.error('Error sending approval:', error);
@@ -677,6 +691,18 @@ export class DGIIService {
       // Extraer datos del ARECF para la respuesta
       const transformer = new Transformer();
       const arecfData = transformer.xml2Json(signedXml);
+
+      // A la bandeja de la empresa (Odoo la recoge); un e-CF que no es para nosotros no se guarda
+      if (status === ReceivedStatus['e-CF Recibido']) {
+        try {
+          bandeja.guardar({
+            tipo: 'ecf', rncReceptor, xml: ecfXml, arecfXml: signedXml,
+            arecfEstado: String(status), arecfCodigo: code !== undefined ? String(code) : undefined, info: ecfInfo,
+          });
+        } catch (err: any) {
+          logger.error(`No se pudo guardar el e-CF recibido en la bandeja: ${err.message}`);
+        }
+      }
 
       // Enviar notificación a Odoo (en background, no bloquea la respuesta)
       this.notifyOdoo({
@@ -979,8 +1005,68 @@ export class DGIIService {
    * @param rnc - RNC para cargar el certificado (opcional)
    * @returns XML de la semilla
    */
+  /**
+   * Entrega un e-CF ya firmado al comprador, si es receptor electrónico (modelo emisor-receptor de la DGII):
+   * busca su URL en el directorio de la DGII, se autentica contra él con nuestro certificado y le envía el XML.
+   * Devuelve su acuse de recibo (ARECF). Si no está en el directorio, no hay nada que entregar.
+   */
+  async entregarAlComprador(signedXml: string, encf: string, rncComprador: string, rnc: string, environment?: string): Promise<any> {
+    const directorio: any[] = (await this.conDgii<any>(rnc, environment, (ecf) => ecf.getCustomerDirectory(rncComprador))) || [];
+    const entrada = directorio.find((d) => d?.urlRecepcion);
+    if (!entrada) {
+      return { entregado: false, motivo: 'El comprador no es receptor electrónico (no está en el directorio de la DGII)' };
+    }
+    // La librería añade fe/autenticacion/... y fe/recepcion/api/ecf a la URL base
+    const url = this.baseDirectorio(entrada.urlRecepcion, /\/fe\/recepcion\/api\/ecf\/?$/i);
+    const certs = certificateService.getCertificate(rnc);
+    const env = this.getEnvironment(environment);
+    // En fila: autenticarse contra el comprador cambia el token global de la librería
+    const acuse = await this.enFila(async () => {
+      const ecf = new ECF(certs, env);
+      await ecf.authenticate(url);
+      return ecf.sendElectronicDocument<any>(signedXml, `${rnc}${encf}.xml`, url);
+    });
+    logger.info(`e-CF ${encf} entregado a ${rncComprador} en ${url}`);
+    return { entregado: true, url, arecf: acuse };
+  }
+
+  /** URL base (con https:// y / final) de un servicio del directorio, sin la ruta que añade el estándar. */
+  private baseDirectorio(url: string, ruta: RegExp): string {
+    const base = String(url).trim().replace(ruta, '').replace(/\/+$/, '') + '/';
+    return /^https?:\/\//i.test(base) ? base : `https://${base}`;
+  }
+
+  /** Envía nuestra aprobación comercial (ACECF firmada) a la URL de aprobación comercial del emisor del e-CF. */
+  async entregarAprobacionAlEmisor(signedXml: string, fileName: string, rncEmisor: string, rnc: string, environment?: string): Promise<any> {
+    const directorio: any[] = (await this.conDgii<any>(rnc, environment, (ecf) => ecf.getCustomerDirectory(rncEmisor))) || [];
+    const entrada = directorio.find((d) => d?.urlAceptacion);
+    if (!entrada) {
+      return { entregado: false, motivo: 'El emisor no tiene URL de aprobación comercial en el directorio de la DGII' };
+    }
+    const url = this.baseDirectorio(entrada.urlAceptacion, /\/fe\/aprobacioncomercial\/api\/ecf\/?$/i);
+    const certs = certificateService.getCertificate(rnc);
+    const env = this.getEnvironment(environment);
+    const respuesta = await this.enFila(async () => {
+      const ecf = new ECF(certs, env);
+      const token: any = await ecf.authenticate(url);
+      const form = new FormData();
+      form.append('xml', new Blob([signedXml], { type: 'text/xml' }), fileName);
+      const r = await fetch(`${url}fe/aprobacioncomercial/api/ecf`, {
+        method: 'POST', body: form, headers: { Authorization: `Bearer ${token?.token}` },
+      });
+      return { status: r.status, cuerpo: (await r.text()).slice(0, 2000) };
+    });
+    logger.info(`Aprobación ${fileName} entregada a ${rncEmisor} en ${url}: HTTP ${respuesta.status}`);
+    return { entregado: respuesta.status >= 200 && respuesta.status < 300, url, ...respuesta };
+  }
+
   /** Aprobación comercial (ACECF) recibida de un cliente: se avisa al Odoo de la empresa receptora. */
   notificarAprobacion(rncReceptor: string, acecfXml: string, info: any): void {
+    try {
+      bandeja.guardar({ tipo: 'acecf', rncReceptor, xml: extraerXml(acecfXml, 'ACECF'), info });
+    } catch (err: any) {
+      logger.error(`No se pudo guardar la aprobación comercial en la bandeja: ${err.message}`);
+    }
     this.notifyOdoo({ tipo: 'acecf', rncReceptor, acecfXml, ecfInfo: info, timestamp: new Date().toISOString() })
       .catch((err) => logger.error('Background Odoo notification (ACECF) failed:', err));
   }

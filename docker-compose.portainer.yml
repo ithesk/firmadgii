@@ -9,6 +9,7 @@
 #   /opt/ecf-servicio/config/empresas.json    empresas (alta: docker exec ecf-servicio node bin/empresa.js alta ...)
 #   /opt/ecf-servicio/config/<RNC>.clave      clave del certificado de cada empresa
 #   /opt/ecf-servicio/certificates/<RNC>.p12  certificado de cada empresa
+#   /opt/ecf-servicio/bandeja/<RNC>/          e-CF y aprobaciones recibidos hasta que Odoo los recoge
 # Sin puertos públicos: Nginx Proxy Manager llega por la red proxy_reverse_default (host ecf-servicio:3000).
 # =============================================================================
 services:
@@ -25,6 +26,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       DGII_ENVIRONMENT: ${DGII_ENVIRONMENT:-cert}
       EMPRESAS_PATH: /app/config/empresas.json
+      BANDEJA_PATH: /app/data/bandeja
       CERTIFICATE_PATH: /app/certificates/default.p12
       # Solo se usa mientras no haya empresas dadas de alta; poner un valor largo al azar
       API_KEY: ${API_KEY}
@@ -34,6 +36,7 @@ services:
       - /opt/ecf-servicio/config:/app/config
       - /opt/ecf-servicio/certificates:/app/certificates:ro
       - /opt/ecf-servicio/logs:/app/logs
+      - /opt/ecf-servicio/bandeja:/app/data/bandeja
     networks:
       - proxy_reverse_default
 

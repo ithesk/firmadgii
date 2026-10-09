@@ -866,6 +866,9 @@ router.post('/void', invoiceController.voidSequence);
  */
 router.get('/customer-directory/:rnc', invoiceController.getCustomerDirectory);
 
+// Entrega del e-CF al comprador que es receptor electrónico (devuelve su ARECF)
+router.post('/deliver', invoiceController.deliverToBuyer);
+
 /**
  * @swagger
  * /api/invoice/qr/generate:
