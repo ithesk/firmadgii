@@ -24,6 +24,13 @@ el vencimiento del certificado y lo recibido que su Odoo aún no recogió.
 - Tras 8 claves erróneas en 15 minutos desde una dirección, esa dirección no puede usar la clave de
   administración durante 15 minutos. Las claves de empresa no se bloquean.
 
+## Avisos al móvil
+
+`bin/vigia.sh` corre cada minuto en otro servidor (hoy 192.168.2.68, `/opt/ecf-vigia`), consulta `/health` y,
+tras 3 minutos sin servicio (5 si es la DGII la que no responde), llama a un webhook de Home Assistant
+(automatización «Servicio e-CF - aviso de caída») que notifica por Telegram y al móvil. Avisa también al volver.
+Va fuera del servidor del servicio a propósito: si se cae la máquina entera, avisa igual.
+
 ## Dar de alta una empresa (10 minutos)
 
 1. Copiar su certificado al servidor: `/opt/ecf-servicio/certificates/<RNC>.p12` (permisos 600).
