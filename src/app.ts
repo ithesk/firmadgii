@@ -8,9 +8,15 @@ import routes from './routes';
 import { errorHandler } from './middleware/errorHandler';
 import { authenticate } from './middleware/auth';
 import logger from './utils/logger';
+import path from 'path';
+import { estadoServicio } from './controllers/adminController';
 import { receiveEcf, receiveAcecf, getSeed, validateCertificate } from './controllers/invoiceController';
 
 const app = express();
+
+// Detrás del proxy inverso (red privada de Docker): la dirección del cliente es la de X-Forwarded-For
+app.set('trust proxy', 'uniquelocal');
+app.disable('x-powered-by');
 
 app.use(cors());
 app.use(express.json());
@@ -109,12 +115,20 @@ app.get('/api-docs.json', (req, res) => {
   res.send(swaggerSpec);
 });
 
+// Salud real: 503 si la fila de la DGII no avanza. Público y sin detalle (el detalle, en /api/admin/resumen).
+// `dgii` indica si la DGII responde: su caída no es un fallo del servicio y no cambia el código HTTP.
 app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    environment: config.dgiiEnvironment,
-  });
+  const estado = estadoServicio();
+  res.status(estado.status === 'ok' ? 200 : 503).json({ ...estado, environment: config.dgiiEnvironment });
+});
+
+// Panel de administración: una página estática; los datos los pide a /api/admin/* con la clave de administración
+app.get('/admin', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'");
+  res.sendFile(path.join(__dirname, '../public/admin.html'));
 });
 
 /**

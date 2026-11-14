@@ -3,14 +3,20 @@ import authRoutes from './authRoutes';
 import invoiceRoutes from './invoiceRoutes';
 import certificateRoutes from './certificateRoutes';
 import { listarBandeja, confirmarBandeja } from '../controllers/invoiceController';
+import { soloAdmin, resumen, actividadEmpresa } from '../controllers/adminController';
+import { anotarActividad } from '../services/actividad';
 
 const router = Router();
 
 router.use('/auth', authRoutes);
-router.use('/invoice', invoiceRoutes);
+router.use('/invoice', anotarActividad, invoiceRoutes);
 router.use('/certificate', certificateRoutes);
 // Bandeja de recibidos (e-CF de proveedores, aprobaciones comerciales) que Odoo recoge con su clave
 router.get('/inbox', listarBandeja);
 router.post('/inbox/ack', confirmarBandeja);
+
+// Administración (solo consulta): exige la clave de administración
+router.get('/admin/resumen', soloAdmin, resumen);
+router.get('/admin/actividad/:rnc', soloAdmin, actividadEmpresa);
 
 export default router;

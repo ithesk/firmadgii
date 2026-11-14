@@ -255,7 +255,8 @@ export const getCustomerDirectory = asyncHandler(async (req: Request, res: Respo
 
   // rnc = RNC a consultar en el directorio
   // certRnc = RNC para cargar el certificado de autenticación (opcional)
-  const result = await dgiiService.getCustomerDirectory(rnc, certRnc, environment);
+  // Sin certRnc, el certificado es el de la empresa de la clave (no el «por defecto», que en multiempresa no existe)
+  const result = await dgiiService.getCustomerDirectory(rnc, certRnc || req.empresa?.rnc, environment);
 
   const response: ApiResponse = {
     success: true,
@@ -662,6 +663,7 @@ export const deliverToBuyer = asyncHandler(async (req: Request, res: Response) =
 export const listarBandeja = asyncHandler(async (req: Request, res: Response) => {
   const rnc = String(req.query.rnc || '');
   const limite = parseInt(String(req.query.limit || '50'), 10) || 50;
+  bandeja.anotarRecogida(rnc);
   res.json({ success: true, data: { documentos: bandeja.listar(rnc, limite) } } as ApiResponse);
 });
 

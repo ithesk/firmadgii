@@ -64,6 +64,7 @@ const cargar = (): Empresa[] => {
 export const empresas = {
   /** Hay archivo de empresas: el acceso es por empresa. */
   multiempresa: (): boolean => cargar().length > 0,
+  todas: (): Empresa[] => cargar(),
   porRnc: (rnc?: string): Empresa | undefined => (rnc ? cargar().find((e) => e.rnc === rnc) : undefined),
   porApiKey: (clave?: string): Empresa | undefined => {
     if (!clave) return undefined;

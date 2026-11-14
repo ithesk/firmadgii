@@ -2,6 +2,8 @@ import { Request, Response, NextFunction } from 'express';
 import config from '../config/environment';
 import { empresas, Empresa } from '../config/empresas';
 import { AppError } from './errorHandler';
+import { intentos } from './intentos';
+import crypto from 'crypto';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -12,6 +14,13 @@ declare module 'express-serve-static-core' {
 
 // Campos donde las rutas reciben el RNC con cuyo certificado se trabaja
 const CAMPOS_RNC = ['rnc', 'rncEmisor', 'certRnc'];
+
+/** Comparación en tiempo constante (no revela cuántos caracteres coinciden). */
+const igual = (a: string, b: string): boolean => {
+  const ha = crypto.createHash('sha256').update(a).digest();
+  const hb = crypto.createHash('sha256').update(b).digest();
+  return crypto.timingSafeEqual(ha, hb);
+};
 
 /**
  * Autenticación por clave de API.
@@ -29,15 +38,18 @@ export const authenticate = (req: Request, res: Response, next: NextFunction) =>
     return next();
   }
 
+  const ip = req.ip || 'desconocida';
   const admin = process.env.API_KEY_ADMIN;
-  if (admin && apiKey === admin) {
+  // La clave de administración no se evalúa para una dirección que viene fallando (ver middleware/intentos.ts)
+  if (admin && apiKey && !intentos.bloqueada(ip) && igual(apiKey, admin)) {
     req.esAdmin = true;
     return next();
   }
 
   const empresa = empresas.porApiKey(apiKey);
   if (!empresa) {
-    throw new AppError('Unauthorized - Invalid API Key', 401);
+    if (apiKey) intentos.fallo(ip);
+    throw new AppError('Unauthorized - Invalid API Key', intentos.bloqueada(ip) ? 429 : 401);
   }
   req.empresa = empresa;
 

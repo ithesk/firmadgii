@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Servicio e-CF · Administración</title>
+<style>
+  :root {
+    --fondo: #f4f5f7; --tarjeta: #ffffff; --texto: #1c2330; --suave: #647084; --borde: #dfe3ea;
+    --bien: #1a7f4b; --bien-f: #e3f4ea; --aviso: #a36200; --aviso-f: #fdf1d8; --mal: #b3261e; --mal-f: #fbe4e2;
+    --acento: #1f4fa3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fondo: #12151b; --tarjeta: #1b2029; --texto: #e8ebf1; --suave: #98a2b3; --borde: #2c3440;
+      --bien: #5fd397; --bien-f: #153526; --aviso: #f0b959; --aviso-f: #3a2c10; --mal: #ff8f86; --mal-f: #43201d;
+      --acento: #8fb4ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--fondo); color: var(--texto); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 48px; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline; justify-content: space-between; margin-bottom: 16px; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 16px; margin: 0; }
+  .suave { color: var(--suave); font-size: 13px; }
+  .tarjeta { background: var(--tarjeta); border: 1px solid var(--borde); border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+  .fila { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; }
+  .chapa { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; }
+  .bien { color: var(--bien); background: var(--bien-f); }
+  .aviso { color: var(--aviso); background: var(--aviso-f); }
+  .mal { color: var(--mal); background: var(--mal-f); }
+  .cifras { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 10px; margin-top: 12px; }
+  .cifra { border: 1px solid var(--borde); border-radius: 8px; padding: 8px 10px; }
+  .cifra b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
+  .cifra span { color: var(--suave); font-size: 12px; }
+  .datos { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 6px 22px; margin-top: 12px; font-size: 14px; }
+  .datos div span { color: var(--suave); }
+  details { margin-top: 12px; }
+  summary { cursor: pointer; color: var(--acento); font-size: 14px; }
+  .tabla { overflow-x: auto; margin-top: 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 5px 10px 5px 0; border-bottom: 1px solid var(--borde); vertical-align: top; }
+  th { color: var(--suave); font-weight: 500; white-space: nowrap; }
+  td.error { word-break: break-word; }
+  input, button, select { font: inherit; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--borde); background: var(--tarjeta); color: var(--texto); }
+  button { cursor: pointer; background: var(--acento); color: var(--tarjeta); border-color: var(--acento); font-weight: 600; }
+  button.plano { background: transparent; color: var(--acento); border-color: var(--borde); font-weight: 500; }
+  #entrada { max-width: 420px; margin: 12vh auto 0; }
+  #entrada input { width: 100%; margin: 12px 0; }
+  #aviso { color: var(--mal); min-height: 1.4em; font-size: 14px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <section id="entrada" class="tarjeta" hidden>
+    <h1>Servicio e-CF</h1>
+    <p class="suave">Administración · solo consulta</p>
+    <form id="formulario">
+      <input id="clave" type="password" autocomplete="current-password" placeholder="Clave de administración" required>
+      <button type="submit">Entrar</button>
+    </form>
+    <p id="aviso"></p>
+  </section>
+
+  <section id="panel" hidden>
+    <header>
+      <div>
+        <h1>Servicio e-CF</h1>
+        <span class="suave" id="actualizado"></span>
+      </div>
+      <div class="fila">
+        <select id="mes" aria-label="Mes"></select>
+        <button class="plano" id="refrescar" type="button">Actualizar</button>
+        <button class="plano" id="salir" type="button">Salir</button>
+      </div>
+    </header>
+    <div id="servicio" class="tarjeta"></div>
+    <div id="empresas"></div>
+  </section>
+</main>
+
+<script>
+(function () {
+  'use strict';
+  var CLAVE = 'ecf-admin';
+  var $ = function (id) { return document.getElementById(id); };
+  var reloj = null;
+
+  // Todo el texto que viene del servidor se escribe con textContent: nunca como HTML
+  function el(etiqueta, clase, texto) {
+    var nodo = document.createElement(etiqueta);
+    if (clase) nodo.className = clase;
+    if (texto !== undefined && texto !== null) nodo.textContent = String(texto);
+    return nodo;
+  }
+  function clave() { try { return sessionStorage.getItem(CLAVE) || ''; } catch (e) { return claveMemoria; } }
+  var claveMemoria = '';
+  function guardarClave(valor) { claveMemoria = valor; try { valor ? sessionStorage.setItem(CLAVE, valor) : sessionStorage.removeItem(CLAVE); } catch (e) {} }
+
+  function hace(iso) {
+    if (!iso) return 'nunca';
+    var s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 0) s = 0;
+    if (s < 90) return 'hace ' + s + ' s';
+    if (s < 5400) return 'hace ' + Math.round(s / 60) + ' min';
+    if (s < 172800) return 'hace ' + Math.round(s / 3600) + ' h';
+    return 'hace ' + Math.round(s / 86400) + ' días';
+  }
+  function fecha(iso) {
+    if (!iso) return '';
+    return new Date(iso).toLocaleString('es-DO', { timeZone: 'America/Santo_Domingo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  }
+  function chapa(texto, tipo) { return el('span', 'chapa ' + tipo, texto); }
+  function dato(nombre, valor) {
+    var d = el('div');
+    d.appendChild(el('span', '', nombre + ': '));
+    d.appendChild(document.createTextNode(valor));
+    return d;
+  }
+  function cifra(numero, nombre, tipo) {
+    var c = el('div', 'cifra');
+    var b = el('b', '', numero);
+    if (tipo && numero > 0) b.style.color = 'var(--' + tipo + ')';
+    c.appendChild(b); c.appendChild(el('span', '', nombre));
+    return c;
+  }
+
+  function pintarServicio(s) {
+    var caja = $('servicio'); caja.textContent = '';
+    var cabeza = el('div', 'fila');
+    cabeza.appendChild(el('h2', '', 'Estado del servicio'));
+    cabeza.appendChild(s.status === 'ok' ? chapa('Funcionando', 'bien') : chapa('Fila detenida', 'mal'));
+    cabeza.appendChild(s.dgii.responde ? chapa('DGII responde · ' + s.dgii.ms + ' ms', 'bien') : chapa('DGII sin respuesta', 'mal'));
+    if (s.fila.pendientes > 3) cabeza.appendChild(chapa(s.fila.pendientes + ' en espera', 'aviso'));
+    caja.appendChild(cabeza);
+    var datos = el('div', 'datos');
+    datos.appendChild(dato('En marcha desde', fecha(s.fila.arranque) + ' (' + hace(s.fila.arranque) + ')'));
+    datos.appendChild(dato('Llamadas a la DGII', s.fila.terminadas + ' bien, ' + s.fila.fallidas + ' con error'));
+    datos.appendChild(dato('Sin respuesta a tiempo', String(s.fila.sinRespuesta)));
+    datos.appendChild(dato('Última llamada correcta', hace(s.fila.ultimaBien)));
+    datos.appendChild(dato('En curso', s.fila.enCurso ? s.fila.enCurso.operacion + ' · ' + s.fila.enCurso.segundos + ' s' : 'nada'));
+    datos.appendChild(dato('Memoria', s.memoriaMb + ' MB · versión ' + (s.version || '?')));
+    if (s.direccionesBloqueadas) datos.appendChild(dato('Direcciones bloqueadas por claves erróneas', String(s.direccionesBloqueadas)));
+    caja.appendChild(datos);
+    if (s.fila.ultimoError) {
+      var e = s.fila.ultimoError;
+      caja.appendChild(el('p', 'suave', 'Último error (' + hace(e.cuando) + '): ' + e.operacion + ' ' + (e.rnc || '') + ' — ' + e.mensaje));
+    }
+  }
+
+  function pintarEmpresa(e) {
+    var caja = el('div', 'tarjeta');
+    var cabeza = el('div', 'fila');
+    cabeza.appendChild(el('h2', '', e.nombre));
+    cabeza.appendChild(el('span', 'suave', 'RNC ' + e.rnc));
+    cabeza.appendChild(e.ambiente === 'prod' ? chapa('Producción', 'bien') : chapa('Pruebas (' + (e.ambiente || 'sin ambiente') + ')', 'aviso'));
+    var c = e.certificado || {};
+    if (c.error) cabeza.appendChild(chapa('Certificado: error', 'mal'));
+    else if (c.dias < 0) cabeza.appendChild(chapa('Certificado vencido', 'mal'));
+    else if (c.dias <= 30) cabeza.appendChild(chapa('Certificado vence en ' + c.dias + ' días', c.dias <= 15 ? 'mal' : 'aviso'));
+    var b = e.bandeja || {};
+    var horasEspera = b.masAntiguo ? (Date.now() - new Date(b.masAntiguo).getTime()) / 3600000 : 0;
+    if (b.cantidad > 0 && horasEspera > 1) cabeza.appendChild(chapa(b.cantidad + ' recibidos sin recoger', 'aviso'));
+    caja.appendChild(cabeza);
+
+    var a = e.actividad || { mes: {}, hoy: {}, errores: [] };
+    var cifras = el('div', 'cifras');
+    cifras.appendChild(cifra(a.hoy.enviados || 0, 'enviados hoy'));
+    cifras.appendChild(cifra(a.mes.enviados || 0, 'enviados en el mes'));
+    cifras.appendChild(cifra(a.mes.aceptados || 0, 'aceptados', 'bien'));
+    cifras.appendChild(cifra(a.mes.condicionales || 0, 'aceptados condicionales', 'aviso'));
+    cifras.appendChild(cifra(a.mes.rechazados || 0, 'rechazados', 'mal'));
+    cifras.appendChild(cifra(a.mes.recibidos || 0, 'recibidos'));
+    cifras.appendChild(cifra(a.mes.fallos || 0, 'llamadas con error', 'aviso'));
+    caja.appendChild(cifras);
+
+    var datos = el('div', 'datos');
+    datos.appendChild(dato('Certificado', c.error ? c.error : 'vence ' + new Date(c.vence).toLocaleDateString('es-DO') + ' (' + c.dias + ' días)' + (c.titular ? ' · ' + c.titular : '')));
+    datos.appendChild(dato('Última actividad', hace(a.ultimaActividad)));
+    datos.appendChild(dato('Odoo recogió la bandeja', b.ultimaRecogida ? hace(b.ultimaRecogida) : 'no desde el último arranque'));
+    datos.appendChild(dato('Recibidos en espera', (b.cantidad || 0) + (b.masAntiguo ? ' · el más antiguo ' + hace(b.masAntiguo) : '')));
+    caja.appendChild(datos);
+
+    if (a.errores && a.errores.length) {
+      var det = el('details');
+      det.appendChild(el('summary', '', 'Últimos errores (' + a.errores.length + ')'));
+      var envoltura = el('div', 'tabla');
+      var tabla = el('table');
+      var tr = el('tr');
+      ['Cuándo', 'Operación', 'Comprobante', 'Mensaje'].forEach(function (t) { tr.appendChild(el('th', '', t)); });
+      tabla.appendChild(tr);
+      a.errores.forEach(function (h) {
+        var f = el('tr');
+        f.appendChild(el('td', '', fecha(h.t)));
+        f.appendChild(el('td', '', h.op));
+        f.appendChild(el('td', '', h.encf || h.trackId || ''));
+        f.appendChild(el('td', 'error', h.error || ''));
+        tabla.appendChild(f);
+      });
+      envoltura.appendChild(tabla); det.appendChild(envoltura); caja.appendChild(det);
+    }
+    return caja;
+  }
+
+  function meses(actual) {
+    var lista = $('mes');
+    if (lista.options.length) return;
+    var d = new Date();
+    for (var i = 0; i < 12; i++) {
+      var valor = d.toISOString().slice(0, 7);
+      var o = el('option', '', d.toLocaleDateString('es-DO', { month: 'long', year: 'numeric', timeZone: 'UTC' }));
+      o.value = valor;
+      lista.appendChild(o);
+      d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() - 1);
+    }
+    lista.value = actual;
+  }
+
+  function mostrarEntrada(mensaje) {
+    if (reloj) { clearInterval(reloj); reloj = null; }
+    $('panel').hidden = true; $('entrada').hidden = false;
+    $('aviso').textContent = mensaje || '';
+    $('clave').value = ''; $('clave').focus();
+  }
+
+  function cargar() {
+    var mes = $('mes').value;
+    return fetch('/api/admin/resumen' + (mes ? '?mes=' + encodeURIComponent(mes) : ''), { headers: { 'x-api-key': clave() }, cache: 'no-store' })
+      .then(function (r) {
+        if (r.status === 401 || r.status === 403) { guardarClave(''); mostrarEntrada('Clave no válida.'); return null; }
+        if (r.status === 429) { guardarClave(''); mostrarEntrada('Demasiados intentos. Espere 15 minutos.'); return null; }
+        return r.json();
+      })
+      .then(function (j) {
+        if (!j) return;
+        if (!j.success) { $('actualizado').textContent = 'Error: ' + (j.error || ''); return; }
+        var d = j.data;
+        meses(d.mes);
+        $('entrada').hidden = true; $('panel').hidden = false;
+        pintarServicio(d.servicio);
+        var caja = $('empresas'); caja.textContent = '';
+        d.empresas.forEach(function (e) { caja.appendChild(pintarEmpresa(e)); });
+        $('actualizado').textContent = d.empresas.length + ' empresas · actualizado ' + new Date().toLocaleTimeString('es-DO');
+        if (!reloj) reloj = setInterval(cargar, 30000);
+      })
+      .catch(function () { $('actualizado').textContent = 'Sin conexión con el servicio · ' + new Date().toLocaleTimeString('es-DO'); });
+  }
+
+  $('formulario').addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    guardarClave($('clave').value.trim());
+    $('aviso').textContent = '';
+    cargar();
+  });
+  $('refrescar').addEventListener('click', cargar);
+  $('mes').addEventListener('change', cargar);
+  $('salir').addEventListener('click', function () { guardarClave(''); mostrarEntrada(''); });
+
+  if (clave()) cargar(); else mostrarEntrada('');
+})();
+</script>
+</body>
+</html>

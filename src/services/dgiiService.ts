@@ -8,6 +8,13 @@ import { empresas } from '../config/empresas';
 import { InvoiceData } from '../types';
 import { DOMParser } from '@xmldom/xmldom';
 import { bandeja, extraerXml } from './bandeja';
+import { fila, ErrorFila, LIMITE_PETICION, Etiqueta } from './fila';
+
+// dgii-ecf no pone límite de tiempo a sus peticiones: una conexión que se queda sin respuesta esperaría para
+// siempre y, como las llamadas van en fila, detendría a todas las empresas. Se le pone aquí, a su cliente HTTP.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { restClient } = require('dgii-ecf/dist/networking/restClient');
+restClient.defaults.timeout = LIMITE_PETICION;
 
 // Instancia del SenderReceiver para procesar ECFs recibidos
 const senderReceiver = new SenderReceiver();
@@ -63,22 +70,26 @@ export class DGIIService {
   }
 
   // dgii-ecf guarda el token en una cabecera global de axios: con varias empresas a la vez, dos llamadas
-  // podrían cruzar tokens. Se ejecutan en fila (una llamada a la DGII a la vez por proceso).
-  private fila: Promise<unknown> = Promise.resolve();
-
-  private enFila<T>(tarea: () => Promise<T>): Promise<T> {
-    const resultado = this.fila.then(tarea, tarea);
-    this.fila = resultado.catch(() => undefined);
-    return resultado;
+  // podrían cruzar tokens. Se ejecutan en fila (una llamada a la DGII a la vez por proceso), cada una con su
+  // tiempo máximo: ver services/fila.ts.
+  private enFila<T>(tarea: (vigente: () => boolean) => Promise<T>, etiqueta: Etiqueta): Promise<T> {
+    // Si la fila da la tarea por perdida (sin respuesta a tiempo), no debe seguir haciendo peticiones después
+    let abandonada = false;
+    return fila.ejecutar(() => tarea(() => !abandonada), etiqueta).catch((error) => {
+      if (error instanceof ErrorFila) abandonada = true;
+      throw error;
+    });
   }
 
   /** Ejecuta una llamada a la DGII; si el token fue rechazado (401), lo renueva y reintenta una vez. */
-  private conDgii<T>(rnc: string | undefined, environment: string | undefined, llamada: (ecf: any, env: any) => Promise<T>): Promise<T> {
-    return this.enFila(() => this.conDgiiSinFila(rnc, environment, llamada));
+  private conDgii<T>(rnc: string | undefined, environment: string | undefined, llamada: (ecf: any, env: any) => Promise<T>, operacion = 'dgii'): Promise<T> {
+    return this.enFila((vigente) => this.conDgiiSinFila(rnc, environment, llamada, vigente),
+      { operacion, rnc, ambiente: environment });
   }
 
-  private async conDgiiSinFila<T>(rnc: string | undefined, environment: string | undefined, llamada: (ecf: any, env: any) => Promise<T>): Promise<T> {
+  private async conDgiiSinFila<T>(rnc: string | undefined, environment: string | undefined, llamada: (ecf: any, env: any) => Promise<T>, vigente: () => boolean = () => true): Promise<T> {
     const { ecf, env } = await this.ecfAutenticado(rnc, environment);
+    if (!vigente()) throw new ErrorFila('timeout: la llamada se abandonó antes de enviarse a la DGII');
     try {
       return await llamada(ecf, env);
     } catch (error: any) {
@@ -87,6 +98,7 @@ export class DGIIService {
         throw error;
       }
       const otro = await this.ecfAutenticado(rnc, environment, true);
+      if (!vigente()) throw new ErrorFila('timeout: la llamada se abandonó antes de enviarse a la DGII');
       return llamada(otro.ecf, otro.env);
     }
   }
@@ -174,7 +186,7 @@ export class DGIIService {
       const archivo = `${rnc}${encf}.xml`;
       logger.info(`Sending signed ${tipo} - RNC: ${rnc}, e-NCF: ${encf}`);
       const response: any = await this.conDgii(rnc, environment, (ecf) =>
-        tipo === 'RFCE' ? ecf.sendSummary(signedXml, archivo) : ecf.sendElectronicDocument(signedXml, archivo));
+        tipo === 'RFCE' ? ecf.sendSummary(signedXml, archivo) : ecf.sendElectronicDocument(signedXml, archivo), 'envio');
       return { ...response, encf, tipo };
     } catch (error: any) {
       logger.error('Error sending signed document:', error);
@@ -204,7 +216,7 @@ export class DGIIService {
       const env = this.getEnvironment(environment);
 
       const ecf = new ECF(certs, env);
-      const tokenData = await this.enFila(() => ecf.authenticate());
+      const tokenData = await this.enFila(() => ecf.authenticate(), { operacion: 'autenticacion', rnc, ambiente: environment });
 
       logger.info('Authentication successful');
       return tokenData;
@@ -243,7 +255,7 @@ export class DGIIService {
       const { signedXml, securityCode } = await this.signXml(xml, 'ECF', rnc);
 
       const env = this.getEnvironment(environment);
-      const response: any = await this.conDgii<any>(rnc, environment, (ecf) => ecf.sendElectronicDocument(signedXml, `${rnc}${encf}.xml`));
+      const response: any = await this.conDgii<any>(rnc, environment, (ecf) => ecf.sendElectronicDocument(signedXml, `${rnc}${encf}.xml`), 'envio');
 
       const rncComprador = invoiceData.ECF?.Encabezado?.Comprador?.RNCComprador;
       const montoTotal = invoiceData.ECF?.Encabezado?.Totales?.MontoTotal;
@@ -279,7 +291,7 @@ export class DGIIService {
     try {
       logger.info(`Getting status for trackID: ${trackId}`);
 
-      const status = await this.conDgii(rnc, environment, (ecf) => ecf.statusTrackId(trackId));
+      const status = await this.conDgii(rnc, environment, (ecf) => ecf.statusTrackId(trackId), 'estado');
 
       logger.info(`Status retrieved successfully for trackID: ${trackId}`);
       return status;
@@ -293,7 +305,7 @@ export class DGIIService {
     try {
       logger.info(`Getting tracks for RNC: ${rnc}, e-NCF: ${encf}`);
 
-      const tracks = await this.conDgii(rnc, environment, (ecf) => ecf.trackStatuses(rnc, encf));
+      const tracks = await this.conDgii(rnc, environment, (ecf) => ecf.trackStatuses(rnc, encf), 'consulta');
 
       logger.info(`Tracks retrieved successfully`);
       return tracks;
@@ -307,7 +319,7 @@ export class DGIIService {
     try {
       logger.info(`Inquiry status - RNC Emisor: ${rncEmisor}, e-NCF: ${encf}`);
 
-      const inquiry = await this.conDgii(rncEmisor, environment, (ecf) => ecf.inquiryStatus(rncEmisor, encf, rncComprador, securityCode));
+      const inquiry = await this.conDgii(rncEmisor, environment, (ecf) => ecf.inquiryStatus(rncEmisor, encf, rncComprador, securityCode), 'consulta');
 
       logger.info('Inquiry completed successfully');
       return inquiry;
@@ -330,7 +342,7 @@ export class DGIIService {
 
       const { signedXml, securityCode } = await this.signXml(xml, 'RFCE', rnc);
 
-      const response: any = await this.conDgii<any>(rnc, environment, (ecf) => ecf.sendSummary(signedXml, `${rnc}${encf}.xml`));
+      const response: any = await this.conDgii<any>(rnc, environment, (ecf) => ecf.sendSummary(signedXml, `${rnc}${encf}.xml`), 'envio');
 
       logger.info(`Summary sent successfully - TrackID: ${response?.trackId || 'unknown'}`);
 
@@ -371,7 +383,7 @@ export class DGIIService {
       const rfceXml = transformer.json2xml(rfceData);
       const { signedXml: signedRfceXml, securityCode: rfceSecurityCode } = await this.signXml(rfceXml, 'RFCE', rnc);
 
-      const response: any = await this.conDgii<any>(rnc, environment, (ecf) => ecf.sendSummary(signedRfceXml, `${rnc}${encf}.xml`));
+      const response: any = await this.conDgii<any>(rnc, environment, (ecf) => ecf.sendSummary(signedRfceXml, `${rnc}${encf}.xml`), 'envio');
 
       logger.info(`Summary with ECF sent successfully - TrackID: ${response?.trackId || 'unknown'}`);
 
@@ -447,7 +459,7 @@ export class DGIIService {
       logger.info(`Sending ARECF to DGII standard endpoint`);
 
       // Enviar al endpoint estándar de DGII
-      const response: any = await this.conDgii<any>(rnc, environment, (ecf) => ecf.sendElectronicDocument(signedXml, fileName));
+      const response: any = await this.conDgii<any>(rnc, environment, (ecf) => ecf.sendElectronicDocument(signedXml, fileName), 'acuse');
 
       logger.info(`Receipt sent successfully - TrackID: ${response?.trackId || 'unknown'}`);
       return {
@@ -474,7 +486,7 @@ export class DGIIService {
 
       const { signedXml } = await this.signXml(xml, 'ACECF', rnc);
 
-      const response: any = await this.conDgii<any>(rnc, environment, (ecf) => ecf.sendCommercialApproval(signedXml, fileName));
+      const response: any = await this.conDgii<any>(rnc, environment, (ecf) => ecf.sendCommercialApproval(signedXml, fileName), 'aprobacion');
 
       logger.info(`Approval sent successfully - TrackID: ${response?.trackId || 'unknown'}`);
 
@@ -514,7 +526,7 @@ export class DGIIService {
 
       const { signedXml } = await this.signXml(xml, 'ANECF', rnc);
 
-      const response: any = await this.conDgii<any>(rnc, environment, (ecf) => ecf.voidENCF(signedXml, fileName));
+      const response: any = await this.conDgii<any>(rnc, environment, (ecf) => ecf.voidENCF(signedXml, fileName), 'anulacion');
 
       logger.info(`Void sequence sent successfully - TrackID: ${response?.trackId || 'unknown'}`);
 
@@ -542,7 +554,7 @@ export class DGIIService {
 
       // Usar el certificado especificado o el por defecto (no el RNC a consultar)
 
-      const directory = await this.conDgii<any>(certRnc, environment, (ecf) => ecf.getCustomerDirectory(rncToQuery));
+      const directory = await this.conDgii<any>(certRnc, environment, (ecf) => ecf.getCustomerDirectory(rncToQuery), 'directorio');
 
       logger.info('Customer directory retrieved successfully');
       return directory;
@@ -921,7 +933,7 @@ export class DGIIService {
       // Nombre del archivo: ACECF_RNCComprador_eNCF.xml
       const fileName = `ACECF_${data.rncComprador}_${data.eNCF}.xml`;
 
-      const response = await this.conDgii<any>(rnc, environment, (ecf) => ecf.sendCommercialApproval(signedXml, fileName));
+      const response = await this.conDgii<any>(rnc, environment, (ecf) => ecf.sendCommercialApproval(signedXml, fileName), 'aprobacion');
 
       logger.info('Commercial approval sent successfully');
 
@@ -1011,7 +1023,7 @@ export class DGIIService {
    * Devuelve su acuse de recibo (ARECF). Si no está en el directorio, no hay nada que entregar.
    */
   async entregarAlComprador(signedXml: string, encf: string, rncComprador: string, rnc: string, environment?: string): Promise<any> {
-    const directorio: any[] = (await this.conDgii<any>(rnc, environment, (ecf) => ecf.getCustomerDirectory(rncComprador))) || [];
+    const directorio: any[] = (await this.conDgii<any>(rnc, environment, (ecf) => ecf.getCustomerDirectory(rncComprador), 'directorio')) || [];
     const entrada = directorio.find((d) => d?.urlRecepcion);
     if (!entrada) {
       return { entregado: false, motivo: 'El comprador no es receptor electrónico (no está en el directorio de la DGII)' };
@@ -1021,11 +1033,12 @@ export class DGIIService {
     const certs = certificateService.getCertificate(rnc);
     const env = this.getEnvironment(environment);
     // En fila: autenticarse contra el comprador cambia el token global de la librería
-    const acuse = await this.enFila(async () => {
+    const acuse = await this.enFila(async (vigente) => {
       const ecf = new ECF(certs, env);
       await ecf.authenticate(url);
+      if (!vigente()) throw new ErrorFila('timeout: la entrega se abandonó antes de enviarse al comprador');
       return ecf.sendElectronicDocument<any>(signedXml, `${rnc}${encf}.xml`, url);
-    });
+    }, { operacion: 'entrega', rnc, ambiente: environment });
     logger.info(`e-CF ${encf} entregado a ${rncComprador} en ${url}`);
     return { entregado: true, url, arecf: acuse };
   }
@@ -1038,7 +1051,7 @@ export class DGIIService {
 
   /** Envía nuestra aprobación comercial (ACECF firmada) a la URL de aprobación comercial del emisor del e-CF. */
   async entregarAprobacionAlEmisor(signedXml: string, fileName: string, rncEmisor: string, rnc: string, environment?: string): Promise<any> {
-    const directorio: any[] = (await this.conDgii<any>(rnc, environment, (ecf) => ecf.getCustomerDirectory(rncEmisor))) || [];
+    const directorio: any[] = (await this.conDgii<any>(rnc, environment, (ecf) => ecf.getCustomerDirectory(rncEmisor), 'directorio')) || [];
     const entrada = directorio.find((d) => d?.urlAceptacion);
     if (!entrada) {
       return { entregado: false, motivo: 'El emisor no tiene URL de aprobación comercial en el directorio de la DGII' };
@@ -1046,16 +1059,18 @@ export class DGIIService {
     const url = this.baseDirectorio(entrada.urlAceptacion, /\/fe\/aprobacioncomercial\/api\/ecf\/?$/i);
     const certs = certificateService.getCertificate(rnc);
     const env = this.getEnvironment(environment);
-    const respuesta = await this.enFila(async () => {
+    const respuesta = await this.enFila(async (vigente) => {
       const ecf = new ECF(certs, env);
       const token: any = await ecf.authenticate(url);
+      if (!vigente()) throw new ErrorFila('timeout: la entrega se abandonó antes de enviarse al emisor');
       const form = new FormData();
       form.append('xml', new Blob([signedXml], { type: 'text/xml' }), fileName);
       const r = await fetch(`${url}fe/aprobacioncomercial/api/ecf`, {
         method: 'POST', body: form, headers: { Authorization: `Bearer ${token?.token}` },
+        signal: AbortSignal.timeout(LIMITE_PETICION),
       });
       return { status: r.status, cuerpo: (await r.text()).slice(0, 2000) };
-    });
+    }, { operacion: 'entrega-aprobacion', rnc, ambiente: environment });
     logger.info(`Aprobación ${fileName} entregada a ${rncEmisor} en ${url}: HTTP ${respuesta.status}`);
     return { entregado: respuesta.status >= 200 && respuesta.status < 300, url, ...respuesta };
   }

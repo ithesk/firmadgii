@@ -14,8 +14,9 @@ const logger = winston.createLogger({
   ),
   defaultMeta: { service: 'dgii-ecf-microservice' },
   transports: [
-    new winston.transports.File({ filename: path.join(logDir, 'error.log'), level: 'error' }),
-    new winston.transports.File({ filename: path.join(logDir, 'combined.log') }),
+    // Con tope de tamaño: sin él, el registro crece hasta llenar el disco
+    new winston.transports.File({ filename: path.join(logDir, 'error.log'), level: 'error', maxsize: 10 * 1024 * 1024, maxFiles: 5, tailable: true }),
+    new winston.transports.File({ filename: path.join(logDir, 'combined.log'), maxsize: 20 * 1024 * 1024, maxFiles: 5, tailable: true }),
   ],
 });
 
