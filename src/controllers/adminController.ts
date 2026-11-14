@@ -161,23 +161,24 @@ export const probarEmpresa = asyncHandler(async (req: Request, res: Response) =>
   };
   let seguir = await medir('Empresa activa', async () => {
     if (empresa.activa === false) throw new Error('La empresa está suspendida: su clave no funciona');
-    return `Ambiente ${empresa.ambiente || 'sin definir'}`;
+    const nombres: Record<string, string> = { prod: 'Producción', cert: 'Certificación', test: 'Pruebas' };
+    return `En ${nombres[empresa.ambiente || ''] || 'un ambiente sin definir'}`;
   });
   seguir = seguir && await medir('Certificado', async () => {
     dgiiService.olvidar(empresa.rnc);   // se vuelve a leer del disco: prueba el archivo y la clave actuales
     const info = certificateService.getCertificateInfo(empresa.rnc);
     const dias = Math.floor((new Date(info.validTo).getTime() - Date.now()) / 86400000);
     if (dias < 0) throw new Error(`El certificado venció hace ${-dias} días`);
-    return `Se abre con su clave; vence en ${dias} días`;
+    return `Abre con su clave; vence en ${dias} días`;
   });
   seguir = seguir && await medir('Autenticación con la DGII', async () => {
     const ficha = await dgiiService.authenticate(empresa.rnc, empresa.ambiente);
     if (!ficha?.token) throw new Error('La DGII no devolvió una ficha');
-    return `La DGII aceptó el certificado (${empresa.ambiente || 'ambiente por defecto'})`;
+    return 'La DGII aceptó el certificado';
   });
   await medir('Recepción pública', async () => {
     dgiiService.generateSeed(empresa.rnc);
-    return `Genera semillas para /${empresa.rnc}/fe/…`;
+    return 'Lista para recibir comprobantes de proveedores';
   });
   const ok = pasos.every((p) => p.ok);
   anotar(req, 'probar', empresa.rnc, ok ? 'bien' : `falla: ${pasos.find((p) => !p.ok)?.paso}`);
