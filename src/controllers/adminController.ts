@@ -200,12 +200,17 @@ export const consultarDocumento = asyncHandler(async (req: Request, res: Respons
   const encf = String(req.body?.encf || '').trim().toUpperCase();
   if (!trackId && !/^E\d{12}$/.test(encf)) throw new AppError('Indique el trackId o un número de comprobante (E + 12 dígitos)', 400);
   anotar(req, 'consultar', empresa.rnc, trackId || encf);
-  let consultas: any[];
-  if (trackId) {
-    consultas = [await dgiiService.getStatus(trackId, empresa.rnc, empresa.ambiente)];
-  } else {
-    const tracks = await dgiiService.getTracks(empresa.rnc, encf, empresa.ambiente);
-    consultas = Array.isArray(tracks) ? tracks : [tracks];
+  let consultas: any[] = [];
+  try {
+    if (trackId) {
+      consultas = [await dgiiService.getStatus(trackId, empresa.rnc, empresa.ambiente)];
+    } else {
+      const tracks = await dgiiService.getTracks(empresa.rnc, encf, empresa.ambiente);
+      consultas = Array.isArray(tracks) ? tracks : [tracks];
+    }
+  } catch (error: any) {
+    // «No encontrado» no es un fallo: la DGII no tiene ese documento (nunca se envió o es de otro ambiente)
+    if (!/no encontrad/i.test(String(error?.message || ''))) throw error;
   }
   const resultado = consultas.filter(Boolean).map((c: any) => ({
     trackId: c.trackId || trackId,
