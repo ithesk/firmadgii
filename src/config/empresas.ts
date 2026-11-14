@@ -36,7 +36,7 @@ export interface Empresa {
 }
 
 const RUTA = process.env.EMPRESAS_PATH || path.join(__dirname, '../../config/empresas.json');
-let cache: { mtime: number; empresas: Empresa[] } = { mtime: -1, empresas: [] };
+let cache: { mtime: number; empresas: Empresa[]; completas: Empresa[] } = { mtime: -1, empresas: [], completas: [] };
 
 export const sha256 = (texto: string): string => crypto.createHash('sha256').update(texto).digest('hex');
 
@@ -45,13 +45,14 @@ const cargar = (): Empresa[] => {
   try {
     mtime = fs.statSync(RUTA).mtimeMs;
   } catch {
-    cache = { mtime: 0, empresas: [] };
+    cache = { mtime: 0, empresas: [], completas: [] };
     return cache.empresas;
   }
   if (mtime !== cache.mtime) {
     try {
       const lista: Empresa[] = JSON.parse(fs.readFileSync(RUTA, 'utf-8'));
-      cache = { mtime, empresas: lista.filter((e) => e && e.rnc && e.activa !== false) };
+      const validas = lista.filter((e) => e && e.rnc);
+      cache = { mtime, empresas: validas.filter((e) => e.activa !== false), completas: validas };
       logger.info(`Empresas cargadas: ${cache.empresas.length}`);
     } catch (error: any) {
       // Un archivo mal escrito no debe dejar el servicio abierto: se mantiene la última versión buena
@@ -63,8 +64,20 @@ const cargar = (): Empresa[] => {
 
 export const empresas = {
   /** Hay archivo de empresas: el acceso es por empresa. */
-  multiempresa: (): boolean => cargar().length > 0,
+  // Cuenta también las suspendidas: suspender la última empresa no debe devolver el servicio al modo de clave única
+  multiempresa: (): boolean => { cargar(); return cache.completas.length > 0; },
   todas: (): Empresa[] => cargar(),
+  /** Todas, incluidas las suspendidas (para administración). Copias: se pueden modificar y pasar a guardar(). */
+  completas: (): Empresa[] => { cargar(); return cache.completas.map((e) => ({ ...e })); },
+  /** Guarda el archivo de empresas de forma atómica (nunca queda a medias) y lo vuelve a leer. */
+  guardar: (lista: Empresa[]): void => {
+    fs.mkdirSync(path.dirname(RUTA), { recursive: true });
+    fs.writeFileSync(`${RUTA}.tmp`, JSON.stringify(lista, null, 2) + '\n', { mode: 0o600 });
+    fs.renameSync(`${RUTA}.tmp`, RUTA);
+    cache.mtime = -1;
+    cargar();
+  },
+  carpeta: (): string => path.dirname(RUTA),
   porRnc: (rnc?: string): Empresa | undefined => (rnc ? cargar().find((e) => e.rnc === rnc) : undefined),
   porApiKey: (clave?: string): Empresa | undefined => {
     if (!clave) return undefined;

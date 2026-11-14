@@ -39,7 +39,8 @@ services:
       API_KEY_ADMIN: ${API_KEY_ADMIN:-}
     volumes:
       - /opt/ecf-servicio/config:/app/config
-      - /opt/ecf-servicio/certificates:/app/certificates:ro
+      # Con escritura: los certificados se pueden subir y renovar desde el panel /admin
+      - /opt/ecf-servicio/certificates:/app/certificates
       - /opt/ecf-servicio/logs:/app/logs
       - /opt/ecf-servicio/bandeja:/app/data/bandeja
       - /opt/ecf-servicio/actividad:/app/data/actividad

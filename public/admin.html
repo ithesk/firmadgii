@@ -50,6 +50,23 @@
   #entrada { max-width: 420px; margin: 12vh auto 0; }
   #entrada input { width: 100%; margin: 12px 0; }
   #aviso { color: var(--mal); min-height: 1.4em; font-size: 14px; }
+  .acciones { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .acciones button, button.chico { padding: 6px 12px; font-size: 14px; }
+  button.peligro { background: transparent; color: var(--mal); border-color: var(--mal); font-weight: 500; }
+  button:disabled { opacity: .55; cursor: wait; }
+  .resultado { margin-top: 12px; border-top: 1px solid var(--borde); padding-top: 12px; font-size: 14px; }
+  .paso { display: flex; gap: 10px; align-items: baseline; padding: 3px 0; }
+  .paso b { min-width: 1.2em; }
+  .suspendida { opacity: .7; }
+  #franja { position: sticky; top: 0; z-index: 5; padding: 10px 16px; text-align: center; font-weight: 600; }
+  dialog { border: 1px solid var(--borde); border-radius: 12px; background: var(--tarjeta); color: var(--texto); padding: 20px; width: min(520px, calc(100vw - 32px)); }
+  dialog::backdrop { background: rgba(0, 0, 0, .5); }
+  dialog h2 { margin-bottom: 12px; }
+  dialog label { display: block; font-size: 13px; color: var(--suave); margin: 10px 0 4px; }
+  dialog input, dialog select { width: 100%; }
+  dialog .pie { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  .secreto { font-family: ui-monospace, Menlo, monospace; font-size: 13px; word-break: break-all; padding: 10px; border: 1px dashed var(--borde); border-radius: 8px; user-select: all; margin: 10px 0; }
+  .error-texto { color: var(--mal); font-size: 14px; min-height: 1.3em; margin-top: 8px; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -57,7 +74,7 @@
 <main>
   <section id="entrada" class="tarjeta" hidden>
     <h1>Servicio e-CF</h1>
-    <p class="suave">Administración · solo consulta</p>
+    <p class="suave">Administración</p>
     <form id="formulario">
       <input id="clave" type="password" autocomplete="current-password" placeholder="Clave de administración" required>
       <button type="submit">Entrar</button>
@@ -73,14 +90,18 @@
       </div>
       <div class="fila">
         <select id="mes" aria-label="Mes"></select>
+        <button id="nueva" type="button">Nueva empresa</button>
         <button class="plano" id="refrescar" type="button">Actualizar</button>
         <button class="plano" id="salir" type="button">Salir</button>
       </div>
     </header>
     <div id="servicio" class="tarjeta"></div>
     <div id="empresas"></div>
+    <div id="auditoria" class="tarjeta"></div>
   </section>
 </main>
+<div id="franja" class="mal" hidden></div>
+<dialog id="dialogo"></dialog>
 
 <script>
 (function () {
@@ -88,6 +109,9 @@
   var CLAVE = 'ecf-admin';
   var $ = function (id) { return document.getElementById(id); };
   var reloj = null;
+  var ultimaBien = 0;
+  var resultados = {};          // resultado de la última acción por empresa: sobrevive al refresco automático
+  var resultadoServicio = null;
 
   // Todo el texto que viene del servidor se escribe con textContent: nunca como HTML
   function el(etiqueta, clase, texto) {
@@ -96,8 +120,8 @@
     if (texto !== undefined && texto !== null) nodo.textContent = String(texto);
     return nodo;
   }
-  function clave() { try { return sessionStorage.getItem(CLAVE) || ''; } catch (e) { return claveMemoria; } }
   var claveMemoria = '';
+  function clave() { try { return sessionStorage.getItem(CLAVE) || claveMemoria; } catch (e) { return claveMemoria; } }
   function guardarClave(valor) { claveMemoria = valor; try { valor ? sessionStorage.setItem(CLAVE, valor) : sessionStorage.removeItem(CLAVE); } catch (e) {} }
 
   function hace(iso) {
@@ -127,7 +151,300 @@
     c.appendChild(b); c.appendChild(el('span', '', nombre));
     return c;
   }
+  function boton(texto, clase, accion) {
+    var b = el('button', clase || 'plano', texto);
+    b.type = 'button';
+    b.addEventListener('click', function () { accion(b); });
+    return b;
+  }
+  function tabla(titulos, filas) {
+    var envoltura = el('div', 'tabla');
+    var t = el('table');
+    var tr = el('tr');
+    titulos.forEach(function (x) { tr.appendChild(el('th', '', x)); });
+    t.appendChild(tr);
+    filas.forEach(function (celdas) {
+      var f = el('tr');
+      celdas.forEach(function (c) { var td = el('td'); if (c && c.nodeType) td.appendChild(c); else td.textContent = c === undefined || c === null ? '' : String(c); f.appendChild(td); });
+      t.appendChild(f);
+    });
+    envoltura.appendChild(t);
+    return envoltura;
+  }
 
+  /* ---------------- llamadas al servicio: siempre con límite de tiempo, para que el panel nunca se quede esperando */
+  function llamar(metodo, ruta, cuerpo, limite) {
+    var control = new AbortController();
+    var corte = setTimeout(function () { control.abort(); }, limite || 20000);
+    var opciones = { method: metodo, headers: { 'x-api-key': clave() }, cache: 'no-store', signal: control.signal };
+    if (cuerpo !== undefined) { opciones.headers['Content-Type'] = 'application/json'; opciones.body = JSON.stringify(cuerpo); }
+    return fetch(ruta, opciones).then(function (r) {
+      clearTimeout(corte);
+      if (r.status === 401 || r.status === 403) { guardarClave(''); mostrarEntrada('Clave no válida.'); throw new Error('Clave no válida'); }
+      if (r.status === 429) { guardarClave(''); mostrarEntrada('Demasiados intentos. Espere 15 minutos.'); throw new Error('Demasiados intentos'); }
+      return r.json().catch(function () { throw new Error('Respuesta no válida del servicio (HTTP ' + r.status + ')'); });
+    }).then(function (j) {
+      if (!j.success) throw new Error(j.error || 'Error');
+      return j.data;
+    }, function (e) {
+      clearTimeout(corte);
+      throw (e && e.name === 'AbortError') ? new Error('El servicio no respondió a tiempo') : e;
+    });
+  }
+  // Ejecuta una acción de un botón: lo desactiva mientras tanto y siempre lo devuelve a su estado
+  function conBoton(b, promesa) {
+    var texto = b.textContent;
+    b.disabled = true; b.textContent = texto + '…';
+    return promesa.then(function (x) { b.disabled = false; b.textContent = texto; return x; },
+      function (e) { b.disabled = false; b.textContent = texto; throw e; });
+  }
+  function cajaResultado(titulo) {
+    var caja = el('div', 'resultado');
+    var cabeza = el('div', 'fila');
+    cabeza.appendChild(el('b', '', titulo));
+    caja.appendChild(cabeza);
+    caja.cabeza = cabeza;
+    return caja;
+  }
+  function fijarResultado(rnc, caja) {
+    var cerrar = boton('Cerrar', 'plano chico', function () {
+      if (rnc) delete resultados[rnc]; else resultadoServicio = null;
+      caja.remove();
+    });
+    caja.cabeza.appendChild(cerrar);
+    if (rnc) resultados[rnc] = caja; else resultadoServicio = caja;
+    var destino = rnc ? document.querySelector('[data-rnc="' + rnc + '"]') : $('servicio');
+    if (destino) { var vieja = destino.querySelector('.resultado'); if (vieja) vieja.remove(); destino.appendChild(caja); }
+  }
+  function errorEn(rnc, titulo, e) {
+    var caja = cajaResultado(titulo);
+    caja.appendChild(el('p', 'error-texto', e.message || String(e)));
+    fijarResultado(rnc, caja);
+  }
+
+  /* ---------------- diálogos */
+  function dialogo(titulo, construir, textoAceptar, alAceptar, peligro) {
+    var d = $('dialogo'); d.textContent = '';
+    var form = el('form'); form.method = 'dialog';
+    form.appendChild(el('h2', '', titulo));
+    var campos = construir(form) || {};
+    var fallo = el('p', 'error-texto');
+    form.appendChild(fallo);
+    var pie = el('div', 'pie');
+    var cancelar = el('button', 'plano', 'Cancelar'); cancelar.type = 'button';
+    cancelar.addEventListener('click', function () { d.close(); });
+    pie.appendChild(cancelar);
+    var aceptar = null;
+    if (alAceptar) {
+      aceptar = el('button', peligro ? 'peligro' : '', textoAceptar); aceptar.type = 'submit';
+      pie.appendChild(aceptar);
+    } else { cancelar.textContent = 'Cerrar'; }
+    form.appendChild(pie);
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      if (!alAceptar) return;
+      fallo.textContent = '';
+      var p;
+      try { p = Promise.resolve(alAceptar(campos)); } catch (e) { p = Promise.reject(e); }
+      conBoton(aceptar, p).then(function (cerrar) { if (cerrar !== false) d.close(); },
+        function (e) { fallo.textContent = e.message || String(e); });
+    });
+    d.appendChild(form);
+    d.showModal();
+    return d;
+  }
+  function campo(form, etiqueta, tipo, valor, atributos) {
+    form.appendChild(el('label', '', etiqueta));
+    var i = el(tipo === 'select' ? 'select' : 'input');
+    if (tipo !== 'select') i.type = tipo;
+    if (valor !== undefined) i.value = valor;
+    for (var k in (atributos || {})) i.setAttribute(k, atributos[k]);
+    form.appendChild(i);
+    return i;
+  }
+  function opciones(select, lista, actual) {
+    lista.forEach(function (o) { var op = el('option', '', o[1]); op.value = o[0]; select.appendChild(op); });
+    if (actual) select.value = actual;
+  }
+  var AMBIENTES = [['test', 'Pruebas (TesteCF)'], ['cert', 'Certificación (CerteCF)'], ['prod', 'Producción']];
+  function confirmar(titulo, texto, textoAceptar, accion, peligro) {
+    dialogo(titulo, function (f) { f.appendChild(el('p', '', texto)); }, textoAceptar, accion, peligro);
+  }
+  function leerArchivo(entrada) {
+    return new Promise(function (bien, mal) {
+      var archivo = entrada.files && entrada.files[0];
+      if (!archivo) return bien('');
+      if (archivo.size > 100000) return mal(new Error('El archivo es demasiado grande para ser un certificado'));
+      var lector = new FileReader();
+      lector.onload = function () { bien(String(lector.result).split(',')[1] || ''); };
+      lector.onerror = function () { mal(new Error('No se pudo leer el archivo')); };
+      lector.readAsDataURL(archivo);
+    });
+  }
+  // Una clave de API recién creada: se enseña una sola vez
+  function mostrarClave(rnc, apiKey, nota) {
+    dialogo('Clave de API de ' + rnc, function (f) {
+      f.appendChild(el('p', '', 'Cópiela ahora y péguela en el Odoo de la empresa. No se vuelve a mostrar.'));
+      f.appendChild(el('div', 'secreto', apiKey));
+      var copiar = boton('Copiar', 'plano chico', function (b) {
+        if (navigator.clipboard) navigator.clipboard.writeText(apiKey).then(function () { b.textContent = 'Copiada'; });
+      });
+      f.appendChild(copiar);
+      if (nota) f.appendChild(el('p', 'suave', nota));
+    });
+  }
+
+  /* ---------------- acciones del servicio */
+  function vaciarFila() {
+    confirmar('Vaciar la fila', 'Se descartan las llamadas a la DGII que esperan turno. No se pierde ninguna factura: cada Odoo las reintenta solo en un minuto.', 'Vaciar', function () {
+      return llamar('POST', '/api/admin/fila/vaciar').then(function (d) {
+        var caja = cajaResultado('Fila vaciada');
+        caja.appendChild(el('p', '', d.descartadas + ' llamadas en espera descartadas.'));
+        fijarResultado(null, caja); cargar();
+      });
+    });
+  }
+  function reiniciar() {
+    confirmar('Reiniciar el servicio', 'El servicio se detiene y vuelve en unos 10 segundos, para todas las empresas. Lo que estuviera enviándose en ese momento lo reintenta Odoo.', 'Reiniciar', function () {
+      return llamar('POST', '/api/admin/reiniciar').then(function () {
+        var caja = cajaResultado('Reinicio pedido');
+        caja.appendChild(el('p', '', 'El panel se actualizará solo cuando el servicio vuelva.'));
+        fijarResultado(null, caja);
+        setTimeout(cargar, 8000);
+      });
+    }, true);
+  }
+
+  /* ---------------- acciones de una empresa */
+  function probar(e, b) {
+    conBoton(b, llamar('POST', '/api/admin/empresas/' + e.rnc + '/probar', {}, 70000)).then(function (d) {
+      var caja = cajaResultado(d.ok ? 'Prueba correcta: puede facturar' : 'La prueba encontró un problema');
+      d.pasos.forEach(function (p) {
+        var fila = el('div', 'paso');
+        var marca = el('b', '', p.ok ? '✓' : '✗'); marca.style.color = 'var(--' + (p.ok ? 'bien' : 'mal') + ')';
+        fila.appendChild(marca);
+        fila.appendChild(el('span', '', p.paso + ' — ' + p.detalle + (p.ms > 300 ? ' (' + (p.ms / 1000).toFixed(1) + ' s)' : '')));
+        caja.appendChild(fila);
+      });
+      fijarResultado(e.rnc, caja);
+    }, function (err) { errorEn(e.rnc, 'No se pudo probar', err); });
+  }
+  function documentos(e, b, buscar) {
+    var ruta = '/api/admin/empresas/' + e.rnc + '/documentos?mes=' + encodeURIComponent($('mes').value) + '&buscar=' + encodeURIComponent(buscar || '');
+    var p = llamar('GET', ruta);
+    (b ? conBoton(b, p) : p).then(function (d) {
+      var caja = cajaResultado('Documentos del mes (' + d.documentos.length + ')');
+      var barra = el('div', 'fila'); barra.style.margin = '8px 0';
+      var entrada = el('input'); entrada.type = 'search'; entrada.placeholder = 'Buscar comprobante o trackId'; entrada.value = buscar || '';
+      entrada.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') { ev.preventDefault(); documentos(e, null, entrada.value); } });
+      barra.appendChild(entrada);
+      barra.appendChild(boton('Buscar', 'plano chico', function () { documentos(e, null, entrada.value); }));
+      barra.appendChild(boton('Preguntar a la DGII por este número', 'plano chico', function (bb) {
+        var v = entrada.value.trim();
+        if (!v) { entrada.focus(); return; }
+        consultar(e, bb, /^E\d{12}$/i.test(v) ? { encf: v } : { trackId: v });
+      }));
+      caja.appendChild(barra);
+      if (!d.documentos.length) caja.appendChild(el('p', 'suave', 'Sin documentos anotados este mes. El registro empezó el 14-11-2026; lo anterior no aparece.'));
+      else caja.appendChild(tabla(['Comprobante', 'Enviado', 'Estado en la DGII', 'Detalle', ''], d.documentos.map(function (doc) {
+        var estado = doc.estado || (doc.errores ? 'Con error' : '');
+        var tipo = /^aceptado$/i.test(estado) ? 'bien' : /rechazado|error/i.test(estado) ? 'mal' : 'aviso';
+        var accion = (doc.trackId || doc.encf) ? boton('Consultar', 'plano chico', function (bb) {
+          consultar(e, bb, doc.trackId ? { trackId: doc.trackId } : { encf: doc.encf });
+        }) : '';
+        return [doc.encf || doc.trackId, fecha(doc.enviado), estado ? chapa(estado, tipo) : '', doc.detalle || doc.ultimoError || '', accion];
+      })));
+      fijarResultado(e.rnc, caja);
+    }, function (err) { errorEn(e.rnc, 'No se pudieron leer los documentos', err); });
+  }
+  function consultar(e, b, cuerpo) {
+    conBoton(b, llamar('POST', '/api/admin/empresas/' + e.rnc + '/consultar', cuerpo, 70000)).then(function (d) {
+      dialogo('Respuesta de la DGII', function (f) {
+        if (!d.resultado.length) f.appendChild(el('p', '', 'La DGII no tiene envíos de ese documento.'));
+        d.resultado.forEach(function (r) {
+          var caja = el('div', 'datos');
+          caja.appendChild(dato('Comprobante', r.encf || '—'));
+          caja.appendChild(dato('Estado', r.estado || '—'));
+          caja.appendChild(dato('TrackId', r.trackId || '—'));
+          if (r.fechaRecepcion) caja.appendChild(dato('Recibido', r.fechaRecepcion));
+          f.appendChild(caja);
+          if (r.detalle) f.appendChild(el('p', '', r.detalle));
+        });
+      });
+    }, function (err) {
+      dialogo('La consulta falló', function (f) { f.appendChild(el('p', 'error-texto', err.message)); });
+    });
+  }
+  function editar(e) {
+    dialogo('Editar ' + e.nombre, function (f) {
+      var nombre = campo(f, 'Razón social', 'text', e.nombre, { maxlength: 150, required: '' });
+      var ambiente = campo(f, 'Ambiente de la DGII', 'select');
+      opciones(ambiente, AMBIENTES, e.ambiente);
+      f.appendChild(el('p', 'suave', 'En Producción los comprobantes son reales ante la DGII.'));
+      return { nombre: nombre, ambiente: ambiente };
+    }, 'Guardar', function (c) {
+      return llamar('PATCH', '/api/admin/empresas/' + e.rnc, { nombre: c.nombre.value, ambiente: c.ambiente.value }).then(cargar);
+    });
+  }
+  function suspender(e) {
+    if (e.activa) {
+      confirmar('Suspender ' + e.nombre, 'Su clave deja de funcionar al momento: su Odoo no podrá emitir ni recibir comprobantes hasta reactivarla. No se borra nada.', 'Suspender', function () {
+        return llamar('PATCH', '/api/admin/empresas/' + e.rnc, { activa: false }).then(cargar);
+      }, true);
+    } else {
+      confirmar('Reactivar ' + e.nombre, 'Su clave de siempre vuelve a funcionar.', 'Reactivar', function () {
+        return llamar('PATCH', '/api/admin/empresas/' + e.rnc, { activa: true }).then(cargar);
+      });
+    }
+  }
+  function nuevaClave(e) {
+    confirmar('Clave nueva para ' + e.nombre, 'La clave actual deja de funcionar al momento. Su Odoo no podrá facturar hasta que le ponga la nueva.', 'Generar clave', function () {
+      return llamar('POST', '/api/admin/empresas/' + e.rnc + '/clave').then(function (d) {
+        setTimeout(function () { mostrarClave(d.rnc, d.apiKey); }, 50);
+        cargar();
+      });
+    }, true);
+  }
+  function certificado(e) {
+    dialogo('Certificado de ' + e.nombre, function (f) {
+      f.appendChild(el('p', 'suave', 'Se comprueba que el archivo se abre con su clave y no está vencido antes de guardarlo. El certificado anterior se conserva en el servidor.'));
+      var archivo = campo(f, 'Archivo .p12', 'file', undefined, { accept: '.p12,.pfx', required: '' });
+      var clave = campo(f, 'Clave del certificado', 'password', '', { autocomplete: 'off', required: '' });
+      return { archivo: archivo, clave: clave };
+    }, 'Subir certificado', function (c) {
+      return leerArchivo(c.archivo).then(function (b64) {
+        return llamar('POST', '/api/admin/empresas/' + e.rnc + '/certificado', { certificadoBase64: b64, claveCertificado: c.clave.value }, 30000);
+      }).then(function (d) {
+        var caja = cajaResultado('Certificado guardado');
+        caja.appendChild(el('p', '', 'Vence el ' + new Date(d.certificado.vence).toLocaleDateString('es-DO') + ' (' + d.certificado.dias + ' días) · ' + d.certificado.titular + '. Pulse «Probar» para comprobar que la DGII lo acepta.'));
+        fijarResultado(e.rnc, caja); cargar();
+      });
+    });
+  }
+  function nuevaEmpresa() {
+    dialogo('Nueva empresa', function (f) {
+      var rnc = campo(f, 'RNC', 'text', '', { inputmode: 'numeric', pattern: '[0-9]{9}|[0-9]{11}', required: '', maxlength: 11 });
+      var nombre = campo(f, 'Razón social', 'text', '', { maxlength: 150, required: '' });
+      var ambiente = campo(f, 'Ambiente de la DGII', 'select');
+      opciones(ambiente, AMBIENTES, 'cert');
+      var archivo = campo(f, 'Certificado .p12 (se puede subir después)', 'file', undefined, { accept: '.p12,.pfx' });
+      var clave = campo(f, 'Clave del certificado', 'password', '', { autocomplete: 'off' });
+      return { rnc: rnc, nombre: nombre, ambiente: ambiente, archivo: archivo, clave: clave };
+    }, 'Dar de alta', function (c) {
+      return leerArchivo(c.archivo).then(function (b64) {
+        var cuerpo = { rnc: c.rnc.value.trim(), nombre: c.nombre.value.trim(), ambiente: c.ambiente.value };
+        if (b64 || c.clave.value) { cuerpo.certificadoBase64 = b64; cuerpo.claveCertificado = c.clave.value; }
+        return llamar('POST', '/api/admin/empresas', cuerpo, 30000);
+      }).then(function (d) {
+        setTimeout(function () {
+          mostrarClave(d.rnc, d.apiKey, 'En la Oficina Virtual de la DGII, sus direcciones de recepción son ' + location.host + '/' + d.rnc + ' (en los tres campos).');
+        }, 50);
+        cargar();
+      });
+    });
+  }
+
+  /* ---------------- pintar */
   function pintarServicio(s) {
     var caja = $('servicio'); caja.textContent = '';
     var cabeza = el('div', 'fila');
@@ -142,6 +459,7 @@
     datos.appendChild(dato('Sin respuesta a tiempo', String(s.fila.sinRespuesta)));
     datos.appendChild(dato('Última llamada correcta', hace(s.fila.ultimaBien)));
     datos.appendChild(dato('En curso', s.fila.enCurso ? s.fila.enCurso.operacion + ' · ' + s.fila.enCurso.segundos + ' s' : 'nada'));
+    datos.appendChild(dato('En espera', String(s.fila.pendientes)));
     datos.appendChild(dato('Memoria', s.memoriaMb + ' MB · versión ' + (s.version || '?')));
     if (s.direccionesBloqueadas) datos.appendChild(dato('Direcciones bloqueadas por claves erróneas', String(s.direccionesBloqueadas)));
     caja.appendChild(datos);
@@ -149,18 +467,27 @@
       var e = s.fila.ultimoError;
       caja.appendChild(el('p', 'suave', 'Último error (' + hace(e.cuando) + '): ' + e.operacion + ' ' + (e.rnc || '') + ' — ' + e.mensaje));
     }
+    var acciones = el('div', 'acciones');
+    acciones.appendChild(boton('Vaciar la fila', 'plano', vaciarFila));
+    acciones.appendChild(boton('Reiniciar el servicio', 'peligro', reiniciar));
+    caja.appendChild(acciones);
+    if (resultadoServicio) caja.appendChild(resultadoServicio);
   }
 
   function pintarEmpresa(e) {
-    var caja = el('div', 'tarjeta');
+    var caja = el('div', 'tarjeta' + (e.activa ? '' : ' suspendida'));
+    caja.setAttribute('data-rnc', e.rnc);
     var cabeza = el('div', 'fila');
     cabeza.appendChild(el('h2', '', e.nombre));
     cabeza.appendChild(el('span', 'suave', 'RNC ' + e.rnc));
+    if (!e.activa) cabeza.appendChild(chapa('Suspendida', 'mal'));
     cabeza.appendChild(e.ambiente === 'prod' ? chapa('Producción', 'bien') : chapa('Pruebas (' + (e.ambiente || 'sin ambiente') + ')', 'aviso'));
     var c = e.certificado || {};
-    if (c.error) cabeza.appendChild(chapa('Certificado: error', 'mal'));
-    else if (c.dias < 0) cabeza.appendChild(chapa('Certificado vencido', 'mal'));
-    else if (c.dias <= 30) cabeza.appendChild(chapa('Certificado vence en ' + c.dias + ' días', c.dias <= 15 ? 'mal' : 'aviso'));
+    if (e.activa) {
+      if (c.error) cabeza.appendChild(chapa('Certificado: error', 'mal'));
+      else if (c.dias < 0) cabeza.appendChild(chapa('Certificado vencido', 'mal'));
+      else if (c.dias <= 30) cabeza.appendChild(chapa('Certificado vence en ' + c.dias + ' días', c.dias <= 15 ? 'mal' : 'aviso'));
+    }
     var b = e.bandeja || {};
     var horasEspera = b.masAntiguo ? (Date.now() - new Date(b.masAntiguo).getTime()) / 3600000 : 0;
     if (b.cantidad > 0 && horasEspera > 1) cabeza.appendChild(chapa(b.cantidad + ' recibidos sin recoger', 'aviso'));
@@ -184,69 +511,86 @@
     datos.appendChild(dato('Recibidos en espera', (b.cantidad || 0) + (b.masAntiguo ? ' · el más antiguo ' + hace(b.masAntiguo) : '')));
     caja.appendChild(datos);
 
+    var acciones = el('div', 'acciones');
+    acciones.appendChild(boton('Probar', 'principal', function (bb) { probar(e, bb); }));
+    acciones.appendChild(boton('Documentos', 'plano', function (bb) { documentos(e, bb, ''); }));
+    acciones.appendChild(boton('Certificado', 'plano', function () { certificado(e); }));
+    acciones.appendChild(boton('Editar', 'plano', function () { editar(e); }));
+    acciones.appendChild(boton('Clave nueva', 'plano', function () { nuevaClave(e); }));
+    acciones.appendChild(boton(e.activa ? 'Suspender' : 'Reactivar', e.activa ? 'peligro' : 'plano', function () { suspender(e); }));
+    caja.appendChild(acciones);
+
     if (a.errores && a.errores.length) {
       var det = el('details');
       det.appendChild(el('summary', '', 'Últimos errores (' + a.errores.length + ')'));
-      var envoltura = el('div', 'tabla');
-      var tabla = el('table');
-      var tr = el('tr');
-      ['Cuándo', 'Operación', 'Comprobante', 'Mensaje'].forEach(function (t) { tr.appendChild(el('th', '', t)); });
-      tabla.appendChild(tr);
-      a.errores.forEach(function (h) {
-        var f = el('tr');
-        f.appendChild(el('td', '', fecha(h.t)));
-        f.appendChild(el('td', '', h.op));
-        f.appendChild(el('td', '', h.encf || h.trackId || ''));
-        f.appendChild(el('td', 'error', h.error || ''));
-        tabla.appendChild(f);
-      });
-      envoltura.appendChild(tabla); det.appendChild(envoltura); caja.appendChild(det);
+      det.appendChild(tabla(['Cuándo', 'Operación', 'Comprobante', 'Mensaje'], a.errores.map(function (h) {
+        return [fecha(h.t), h.op, h.encf || h.trackId || '', h.error || ''];
+      })));
+      caja.appendChild(det);
     }
+    if (resultados[e.rnc]) caja.appendChild(resultados[e.rnc]);
     return caja;
+  }
+
+  function pintarAuditoria(acciones) {
+    var caja = $('auditoria'); caja.textContent = '';
+    caja.appendChild(el('h2', '', 'Últimas acciones de administración'));
+    if (!acciones || !acciones.length) { caja.appendChild(el('p', 'suave', 'Ninguna todavía.')); return; }
+    caja.appendChild(tabla(['Cuándo', 'Acción', 'Empresa', 'Detalle', 'Desde'], acciones.map(function (a) {
+      return [fecha(a.t), a.accion, a.rnc || '', a.detalle || '', a.ip || ''];
+    })));
   }
 
   function meses(actual) {
     var lista = $('mes');
     if (lista.options.length) return;
-    var d = new Date();
+    var d = new Date(); d.setUTCDate(1);
     for (var i = 0; i < 12; i++) {
-      var valor = d.toISOString().slice(0, 7);
       var o = el('option', '', d.toLocaleDateString('es-DO', { month: 'long', year: 'numeric', timeZone: 'UTC' }));
-      o.value = valor;
+      o.value = d.toISOString().slice(0, 7);
       lista.appendChild(o);
-      d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() - 1);
+      d.setUTCMonth(d.getUTCMonth() - 1);
     }
     lista.value = actual;
   }
 
+  function franja(texto) { var f = $('franja'); f.hidden = !texto; f.textContent = texto || ''; }
+
   function mostrarEntrada(mensaje) {
     if (reloj) { clearInterval(reloj); reloj = null; }
+    if ($('dialogo').open) $('dialogo').close();
+    franja('');
     $('panel').hidden = true; $('entrada').hidden = false;
     $('aviso').textContent = mensaje || '';
     $('clave').value = ''; $('clave').focus();
   }
 
+  var abiertos = {};   // listas de errores desplegadas: se conservan al refrescar
   function cargar() {
     var mes = $('mes').value;
-    return fetch('/api/admin/resumen' + (mes ? '?mes=' + encodeURIComponent(mes) : ''), { headers: { 'x-api-key': clave() }, cache: 'no-store' })
-      .then(function (r) {
-        if (r.status === 401 || r.status === 403) { guardarClave(''); mostrarEntrada('Clave no válida.'); return null; }
-        if (r.status === 429) { guardarClave(''); mostrarEntrada('Demasiados intentos. Espere 15 minutos.'); return null; }
-        return r.json();
-      })
-      .then(function (j) {
-        if (!j) return;
-        if (!j.success) { $('actualizado').textContent = 'Error: ' + (j.error || ''); return; }
-        var d = j.data;
-        meses(d.mes);
-        $('entrada').hidden = true; $('panel').hidden = false;
-        pintarServicio(d.servicio);
-        var caja = $('empresas'); caja.textContent = '';
-        d.empresas.forEach(function (e) { caja.appendChild(pintarEmpresa(e)); });
-        $('actualizado').textContent = d.empresas.length + ' empresas · actualizado ' + new Date().toLocaleTimeString('es-DO');
-        if (!reloj) reloj = setInterval(cargar, 30000);
-      })
-      .catch(function () { $('actualizado').textContent = 'Sin conexión con el servicio · ' + new Date().toLocaleTimeString('es-DO'); });
+    return llamar('GET', '/api/admin/resumen' + (mes ? '?mes=' + encodeURIComponent(mes) : ''), undefined, 15000).then(function (d) {
+      ultimaBien = Date.now();
+      franja('');
+      meses(d.mes);
+      $('entrada').hidden = true; $('panel').hidden = false;
+      document.querySelectorAll('[data-rnc]').forEach(function (n) { var det = n.querySelector('details'); abiertos[n.getAttribute('data-rnc')] = !!(det && det.open); });
+      pintarServicio(d.servicio);
+      var caja = $('empresas'); caja.textContent = '';
+      d.empresas.forEach(function (e) {
+        var nodo = pintarEmpresa(e);
+        var det = nodo.querySelector('details');
+        if (det && abiertos[e.rnc]) det.open = true;
+        caja.appendChild(nodo);
+      });
+      pintarAuditoria(d.acciones);
+      $('actualizado').textContent = d.empresas.length + ' empresas · actualizado ' + new Date().toLocaleTimeString('es-DO');
+      if (!reloj) reloj = setInterval(function () { if (!$('dialogo').open) cargar(); }, 30000);
+    }, function (e) {
+      if ($('panel').hidden) { if (!$('aviso').textContent) $('aviso').textContent = e.message; return; }
+      // El panel sigue mostrando lo último que supo, pero deja claro que el servicio no contesta
+      franja('El servicio no responde' + (ultimaBien ? ' desde hace ' + Math.max(1, Math.round((Date.now() - ultimaBien) / 60000)) + ' min' : '') + ' — ' + e.message + '. Reintentando…');
+      if (!reloj) reloj = setInterval(function () { if (!$('dialogo').open) cargar(); }, 30000);
+    });
   }
 
   $('formulario').addEventListener('submit', function (ev) {
@@ -255,8 +599,9 @@
     $('aviso').textContent = '';
     cargar();
   });
-  $('refrescar').addEventListener('click', cargar);
-  $('mes').addEventListener('change', cargar);
+  $('refrescar').addEventListener('click', function () { cargar(); });
+  $('nueva').addEventListener('click', nuevaEmpresa);
+  $('mes').addEventListener('change', function () { resultados = {}; cargar(); });
   $('salir').addEventListener('click', function () { guardarClave(''); mostrarEntrada(''); });
 
   if (clave()) cargar(); else mostrarEntrada('');

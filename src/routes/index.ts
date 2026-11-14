@@ -3,7 +3,10 @@ import authRoutes from './authRoutes';
 import invoiceRoutes from './invoiceRoutes';
 import certificateRoutes from './certificateRoutes';
 import { listarBandeja, confirmarBandeja } from '../controllers/invoiceController';
-import { soloAdmin, resumen, actividadEmpresa } from '../controllers/adminController';
+import {
+  soloAdmin, resumen, actividadEmpresa, vaciarFila, reiniciar, probarEmpresa, documentosEmpresa, consultarDocumento,
+  altaEmpresa, cambiarEmpresa, nuevaClaveEmpresa, subirCertificado,
+} from '../controllers/adminController';
 import { anotarActividad } from '../services/actividad';
 
 const router = Router();
@@ -15,8 +18,17 @@ router.use('/certificate', certificateRoutes);
 router.get('/inbox', listarBandeja);
 router.post('/inbox/ack', confirmarBandeja);
 
-// Administración (solo consulta): exige la clave de administración
+// Administración: exige la clave de administración; cada acción queda en la auditoría
 router.get('/admin/resumen', soloAdmin, resumen);
 router.get('/admin/actividad/:rnc', soloAdmin, actividadEmpresa);
+router.post('/admin/fila/vaciar', soloAdmin, vaciarFila);
+router.post('/admin/reiniciar', soloAdmin, reiniciar);
+router.post('/admin/empresas', soloAdmin, altaEmpresa);
+router.patch('/admin/empresas/:rnc', soloAdmin, cambiarEmpresa);
+router.post('/admin/empresas/:rnc/probar', soloAdmin, probarEmpresa);
+router.get('/admin/empresas/:rnc/documentos', soloAdmin, documentosEmpresa);
+router.post('/admin/empresas/:rnc/consultar', soloAdmin, consultarDocumento);
+router.post('/admin/empresas/:rnc/clave', soloAdmin, nuevaClaveEmpresa);
+router.post('/admin/empresas/:rnc/certificado', soloAdmin, subirCertificado);
 
 export default router;

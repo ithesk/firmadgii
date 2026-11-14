@@ -49,13 +49,19 @@ class Fila {
   private ultimaBien = 0;
   private ultimoError: { cuando: number; mensaje: string; operacion: string; rnc?: string } | null = null;
   private readonly arranque = Date.now();
+  private tanda = 0;   // cambia al vaciar la fila: lo que esperaba de una tanda anterior ya no se ejecuta
 
   ejecutar<T>(tarea: () => Promise<T>, etiqueta: Etiqueta = { operacion: 'dgii' }): Promise<T> {
     const pedida = Date.now();
+    const tanda = this.tanda;
     this.pendientes += 1;
     const turno = async (): Promise<T> => {
       this.pendientes -= 1;
       const espera = Date.now() - pedida;
+      if (tanda !== this.tanda) {
+        this.fallidas += 1;
+        throw new ErrorFila('timeout: la fila se vació desde administración y la llamada no se envió a la DGII', 503);
+      }
       if (espera > LIMITE_ESPERA) {
         this.fallidas += 1;
         this.vencidas += 1;
@@ -95,6 +101,12 @@ class Fila {
     if (/timeout|fila/i.test(mensaje)) {
       logger.error(`Fila DGII: ${etiqueta.operacion} ${etiqueta.rnc || ''}: ${mensaje}`);
     }
+  }
+
+  /** Descarta todo lo que espera turno (lo que ya está en curso termina o vence solo). Devuelve cuántas eran. */
+  vaciar(): number {
+    this.tanda += 1;
+    return this.pendientes;
   }
 
   /** Segundos que lleva la tarea en curso (0 si no hay ninguna). */

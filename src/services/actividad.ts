@@ -23,6 +23,7 @@ export interface Hecho {
   encf?: string;
   trackId?: string;
   estado?: string;        // respuesta de la DGII: Aceptado, Rechazado, En Proceso…
+  detalle?: string;       // mensajes de la DGII (motivo del rechazo)
   ambiente?: string;
   error?: string;
 }
@@ -45,6 +46,54 @@ const vistos = new Set<string>();
 
 const archivo = (rnc: string, mes: string): string => path.join(RAIZ, rnc, `${mes}.jsonl`);
 const mesDe = (fecha: Date): string => fecha.toISOString().slice(0, 7);
+
+/** Mensajes de la DGII en una línea (códigos y textos), sin los de relleno. */
+export const textoMensajes = (mensajes: any): string | undefined => {
+  if (!Array.isArray(mensajes)) return undefined;
+  const texto = mensajes
+    .map((m: any) => `${m?.codigo ?? ''} ${m?.valor ?? ''}`.trim())
+    .filter((t: string) => t && t !== '0')
+    .join('; ');
+  return texto ? texto.slice(0, 600) : undefined;
+};
+
+export interface Accion {
+  t: string;
+  accion: string;
+  rnc?: string;
+  detalle?: string;
+  ip?: string;
+}
+
+const archivoAuditoria = (mes: string): string => path.join(RAIZ, '_admin', `${mes}.jsonl`);
+
+/** Auditoría: toda acción hecha desde el panel queda anotada (qué, sobre qué empresa, desde qué dirección). */
+export const auditoria = {
+  anotar(accion: string, datos: { rnc?: string; detalle?: string; ip?: string } = {}): void {
+    try {
+      const ahora = new Date();
+      const destino = archivoAuditoria(mesDe(ahora));
+      fs.mkdirSync(path.dirname(destino), { recursive: true });
+      fs.appendFileSync(destino, JSON.stringify({ t: ahora.toISOString(), accion, ...datos }) + '\n', { mode: 0o600 });
+      logger.info(`Administración: ${accion} ${datos.rnc || ''} ${datos.detalle || ''} (${datos.ip || ''})`);
+    } catch (error: any) {
+      logger.error(`No se pudo anotar la auditoría: ${error.message}`);
+    }
+  },
+  ultimas(cuantas = 30): Accion[] {
+    const hoy = new Date();
+    const anterior = new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth() - 1, 1));
+    const lineas: Accion[] = [];
+    for (const mes of [mesDe(anterior), mesDe(hoy)]) {
+      try {
+        for (const l of fs.readFileSync(archivoAuditoria(mes), 'utf-8').split('\n')) {
+          if (l) { try { lineas.push(JSON.parse(l)); } catch { /* línea cortada */ } }
+        }
+      } catch { /* sin acciones ese mes */ }
+    }
+    return lineas.slice(-cuantas).reverse();
+  },
+};
 
 export const actividad = {
   registrar(rnc: string | undefined, hecho: Omit<Hecho, 't'>): void {
@@ -78,6 +127,37 @@ export const actividad = {
       } catch { /* línea cortada: se ignora */ }
     }
     return hechos;
+  },
+
+  /** Documentos del mes, uno por comprobante, con su último estado conocido. Los más recientes primero. */
+  documentos(rnc: string, mes?: string, buscar = ''): any[] {
+    const porClave = new Map<string, any>();
+    const alias = new Map<string, string>();
+    for (const h of this.leer(rnc, mes)) {
+      if (!['envio', 'estado', 'anulacion', 'entrega'].includes(h.op)) continue;
+      // El envío se anota con su comprobante y su trackId; un estado posterior puede traer solo el trackId
+      if (h.encf && h.trackId) alias.set(h.trackId, h.encf);
+      const clave = h.encf || (h.trackId && alias.get(h.trackId)) || h.trackId;
+      if (!clave) continue;
+      // Una consulta fallida de algo que nunca se envió por aquí no es un documento
+      if (h.op === 'estado' && !h.ok && !porClave.has(clave)) continue;
+      const d = porClave.get(clave) || { encf: h.encf || '', trackId: '', enviado: null, estado: '', detalle: '', entregado: null, errores: 0, ultimo: h.t, ultimoError: '' };
+      d.ultimo = h.t;
+      if (h.encf && !d.encf) d.encf = h.encf;
+      if (h.trackId) d.trackId = h.trackId;
+      if (!h.ok) { d.errores += 1; d.ultimoError = h.error || ''; }
+      if (h.op === 'envio' && h.ok) { d.enviado = h.t; if (!d.estado) d.estado = 'Enviado'; }
+      if (h.op === 'estado' && h.ok && h.estado) { d.estado = h.estado; d.detalle = h.detalle || ''; }
+      if (h.op === 'anulacion' && h.ok) d.estado = 'Anulado';
+      if (h.op === 'entrega') d.entregado = h.ok;
+      porClave.set(clave, d);
+    }
+    const lista = [...porClave.values()];
+    const filtro = buscar.trim().toLowerCase();
+    return lista
+      .filter((d) => !filtro || `${d.encf} ${d.trackId}`.toLowerCase().includes(filtro))
+      .sort((a, b) => (a.ultimo < b.ultimo ? 1 : -1))
+      .slice(0, 300);
   },
 
   /** Cuentas del mes y de hoy para el panel. Los comprobantes se cuentan una vez, con su último estado. */
@@ -133,6 +213,7 @@ export const anotarActividad = (req: Request, res: Response, next: NextFunction)
       const ok = res.statusCode < 400 && cuerpo?.success !== false;
       const trackId = datos.trackId || (operacion === 'estado' ? req.path.split('/').pop() : undefined);
       const estado = typeof datos.estado === 'string' ? datos.estado : undefined;
+      const detalle = textoMensajes(datos.mensajes);
       // Solo deja rastro lo que importa: lo que va a la DGII y todo lo que falla
       if (ok && (operacion === 'firma' || operacion === 'consulta' || operacion === 'directorio')) return;
       if (ok && operacion === 'estado') {
@@ -149,6 +230,7 @@ export const anotarActividad = (req: Request, res: Response, next: NextFunction)
         encf: pedido.encf || pedido.eNCF || datos.encf || undefined,
         trackId,
         estado,
+        detalle,
         ambiente: pedido.environment || (req.query as any).environment,
         error: ok ? undefined : String(cuerpo?.error || `HTTP ${res.statusCode}`),
       });

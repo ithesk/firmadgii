@@ -50,6 +50,14 @@ export class DGIIService {
   // Token de la DGII por RNC y ambiente: dura 1 hora, no hace falta pedirlo en cada documento
   private tokens = new Map<string, { token: string; vence: number }>();
 
+  /** Tras cambiar el certificado de una empresa: se descartan el certificado cargado y sus fichas de la DGII. */
+  olvidar(rnc: string): void {
+    certificateService.clearCache(rnc);
+    for (const clave of [...this.tokens.keys()]) {
+      if (clave.startsWith(`${rnc}|`)) this.tokens.delete(clave);
+    }
+  }
+
   /** ECF autenticado, reutilizando el token mientras no esté por vencer. */
   private async ecfAutenticado(rnc?: string, environment?: string, renovar = false): Promise<{ ecf: any; env: any }> {
     const certs = certificateService.getCertificate(rnc);

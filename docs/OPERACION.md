@@ -12,8 +12,24 @@ de API; ninguna puede usar el certificado de otra.
 | Estado por empresa | `https://<servicio>/admin` con la clave de administración (`API_KEY_ADMIN` del stack) |
 | Registro | `/opt/ecf-servicio/logs/combined.log` y `error.log` (rotan solos) |
 
-El panel es de **solo consulta**: fila, respuesta de la DGII, y por empresa los documentos del mes, los errores,
-el vencimiento del certificado y lo recibido que su Odoo aún no recogió.
+El panel muestra la fila, la respuesta de la DGII y, por empresa, los documentos del mes, los errores, el
+vencimiento del certificado y lo recibido que su Odoo aún no recogió. Y permite actuar sin entrar al servidor:
+
+| Acción | Para qué |
+|---|---|
+| Vaciar la fila | Descarta lo que espera turno ante la DGII (Odoo lo reintenta solo) |
+| Reiniciar el servicio | Vuelve en unos 10 s; último recurso |
+| Probar (por empresa) | Comprueba certificado, clave y autenticación con la DGII, y dice qué paso falla |
+| Documentos | Comprobantes del mes con su estado; «Consultar» pregunta a la DGII en el momento |
+| Certificado | Sube o renueva el .p12 (se valida antes de guardar; el anterior queda como `.anterior`) |
+| Editar / Suspender / Clave nueva | Nombre y ambiente, corte inmediato del acceso, clave de API nueva (se muestra una vez) |
+| Nueva empresa | Alta completa, con o sin certificado |
+
+Cada acción queda anotada (qué, sobre qué empresa, desde qué dirección) en «Últimas acciones de administración»
+y en `actividad/_admin/`. El servicio no guarda los XML: reenviar un documento se hace desde el Odoo de la empresa.
+
+**La clave de administración da control total** (alta de empresas, certificados, claves). Debe ser larga y al azar,
+y no compartirse. Tras 8 intentos fallidos desde una dirección queda bloqueada 15 minutos para esa dirección.
 
 ## Protecciones
 
@@ -32,6 +48,8 @@ tras 3 minutos sin servicio (5 si es la DGII la que no responde), llama a un web
 Va fuera del servidor del servicio a propósito: si se cae la máquina entera, avisa igual.
 
 ## Dar de alta una empresa (10 minutos)
+
+Lo normal es hacerlo desde el panel («Nueva empresa»). A mano, en el servidor:
 
 1. Copiar su certificado al servidor: `/opt/ecf-servicio/certificates/<RNC>.p12` (permisos 600).
 2. Guardar la clave del certificado en `/opt/ecf-servicio/config/<RNC>.clave` (permisos 600, sin salto de línea).
