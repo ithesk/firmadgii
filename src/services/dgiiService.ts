@@ -8,6 +8,7 @@ import { empresas } from '../config/empresas';
 import { InvoiceData } from '../types';
 import { DOMParser } from '@xmldom/xmldom';
 import { bandeja, extraerXml } from './bandeja';
+import { cuarentena } from './cuarentena';
 import { fila, ErrorFila, LIMITE_PETICION, Etiqueta } from './fila';
 
 // dgii-ecf no pone límite de tiempo a sus peticiones: una conexión que se queda sin respuesta esperaría para
@@ -721,6 +722,8 @@ export class DGIIService {
           });
         } catch (err: any) {
           logger.error(`No se pudo guardar el e-CF recibido en la bandeja: ${err.message}`);
+          // Ya se respondió el acuse: que no se pierda
+          cuarentena.guardarDocumento(`No se pudo guardar en la bandeja de ${rncReceptor}: ${err.message}`, ecfXml, { arecfXml: signedXml });
         }
       }
 

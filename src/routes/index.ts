@@ -5,7 +5,7 @@ import certificateRoutes from './certificateRoutes';
 import { listarBandeja, confirmarBandeja } from '../controllers/invoiceController';
 import {
   soloAdmin, resumen, actividadEmpresa, vaciarFila, reiniciar, probarEmpresa, documentosEmpresa, consultarDocumento,
-  altaEmpresa, cambiarEmpresa, nuevaClaveEmpresa, subirCertificado,
+  altaEmpresa, cambiarEmpresa, nuevaClaveEmpresa, subirCertificado, listarCuarentena, leerCuarentena,
 } from '../controllers/adminController';
 import { anotarActividad } from '../services/actividad';
 
@@ -20,6 +20,8 @@ router.post('/inbox/ack', confirmarBandeja);
 
 // Administración: exige la clave de administración; cada acción queda en la auditoría
 router.get('/admin/resumen', soloAdmin, resumen);
+router.get('/admin/cuarentena', soloAdmin, listarCuarentena);
+router.get('/admin/cuarentena/:id', soloAdmin, leerCuarentena);
 router.get('/admin/actividad/:rnc', soloAdmin, actividadEmpresa);
 router.post('/admin/fila/vaciar', soloAdmin, vaciarFila);
 router.post('/admin/reiniciar', soloAdmin, reiniciar);

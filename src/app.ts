@@ -11,6 +11,7 @@ import logger from './utils/logger';
 import path from 'path';
 import { estadoServicio } from './controllers/adminController';
 import { receiveEcf, receiveAcecf, getSeed, validateCertificate } from './controllers/invoiceController';
+import { cuarentena } from './services/cuarentena';
 
 const app = express();
 
@@ -27,6 +28,25 @@ app.use((req, res, next) => {
     ip: req.ip,
     userAgent: req.get('user-agent'),
   });
+  next();
+});
+
+/**
+ * Rutas públicas mal armadas por algunos emisores: a la URL registrada en la DGII le vuelven a pegar el sufijo
+ * estándar, p. ej. /130939616/fe/autenticacion/fe/Autenticacion/api/Semilla (visto el 14-11-2026).
+ * Si «/fe/» aparece más de una vez, se queda el RNC del principio (si lo hay) y el último «/fe/…».
+ */
+const RUTA_FE_REPETIDA = /^(\/\d{9,11})?\/fe\/.*(\/fe\/.+)$/i;
+const esRutaPublica = (ruta: string) => /\/fe\//i.test(ruta) && !/^\/api(\/|$)/i.test(ruta);
+app.use((req, res, next) => {
+  const m = req.path.match(RUTA_FE_REPETIDA);
+  if (m) {
+    const consulta = req.url.slice(req.path.length);
+    const nueva = `${m[1] || ''}${m[2]}`;
+    (req as any).rutaOriginal = req.originalUrl;
+    logger.warn(`Ruta pública corregida: ${req.path} → ${nueva}`, { ip: req.ip });
+    req.url = nueva + consulta;
+  }
   next();
 });
 
@@ -148,7 +168,11 @@ app.post('/fe/recepcion/api/ecf', express.raw({ type: '*/*', limit: '10mb' }), r
  */
 const empresaDeLaRuta = (req: express.Request, res: express.Response, next: express.NextFunction) => {
   if (empresas.multiempresa() && !empresas.porRnc(req.params.rnc)) {
-    res.status(404).json({ success: false, error: 'RNC no registrado en este servicio' });
+    // Se guarda igual: puede ser una factura para una empresa que aún no está dada de alta
+    express.raw({ type: '*/*', limit: '10mb' })(req, res, () => {
+      cuarentena.guardar(req, `RNC ${req.params.rnc} no registrado en este servicio`);
+      res.status(404).json({ success: false, error: 'RNC no registrado en este servicio' });
+    });
     return;
   }
   next();
@@ -180,7 +204,27 @@ app.get('/fe/autenticacion/api/semilla', getSeed);
  */
 app.post('/fe/autenticacion/api/validacioncertificado', express.raw({ type: '*/*', limit: '10mb' }), validateCertificate);
 
+/**
+ * Cualquier otra ruta pública /fe/… que no existe: se guarda en cuarentena antes de responder 404,
+ * para ver después qué era y no perder una factura por una dirección mal escrita.
+ */
+app.all(/\/fe\//i, (req, res, next) => {
+  if (!esRutaPublica(req.path)) return next();
+  express.raw({ type: '*/*', limit: '10mb' })(req, res, () => {
+    cuarentena.guardar(req, 'Ruta pública desconocida');
+    res.status(404).json({ success: false, error: 'Ruta no encontrada' });
+  });
+});
+
 app.use('/api', authenticate, routes);
+
+// Un fallo al procesar algo recibido por las rutas públicas tampoco se pierde
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (esRutaPublica(req.path) && req.method === 'POST') {
+    cuarentena.guardar(req, `Error al procesar: ${err?.message || err}`);
+  }
+  next(err);
+});
 
 app.use(errorHandler);
 

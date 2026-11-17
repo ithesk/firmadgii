@@ -16,6 +16,7 @@ import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { intentos } from '../middleware/intentos';
 import { actividad, auditoria, textoMensajes } from '../services/actividad';
 import { bandeja } from '../services/bandeja';
+import { cuarentena } from '../services/cuarentena';
 import certificateService from '../services/certificateService';
 import dgiiService from '../services/dgiiService';
 import { fila } from '../services/fila';
@@ -342,4 +343,15 @@ export const subirCertificado = asyncHandler(async (req: Request, res: Response)
   anotar(req, 'certificado', empresa.rnc, `vence ${info.vence.slice(0, 10)} · ${info.titular}`);
   logger.info(`Certificado de ${empresa.rnc} renovado desde administración`);
   res.json({ success: true, data: { rnc: empresa.rnc, certificado: info } });
+});
+
+/** Lo que llegó por las rutas públicas y no se pudo procesar (ver services/cuarentena.ts). */
+export const listarCuarentena = asyncHandler(async (req: Request, res: Response) => {
+  res.json({ success: true, data: { total: cuarentena.total(), documentos: cuarentena.listar(Number(req.query.limite) || 100) } });
+});
+
+export const leerCuarentena = asyncHandler(async (req: Request, res: Response) => {
+  const doc = cuarentena.leer(req.params.id);
+  if (!doc) throw new AppError('No existe en la cuarentena', 404);
+  res.json({ success: true, data: doc });
 });

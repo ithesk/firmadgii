@@ -5,6 +5,7 @@ import { asyncHandler } from '../middleware/errorHandler';
 import config from '../config/environment';
 import logger from '../utils/logger';
 import { bandeja } from '../services/bandeja';
+import { cuarentena } from '../services/cuarentena';
 
 export const signXml = asyncHandler(async (req: Request, res: Response) => {
   const { xmlData, documentType } = req.body as SignXmlRequest;
@@ -321,6 +322,7 @@ export const receiveEcf = asyncHandler(async (req: Request, res: Response) => {
   const rncReceptor = req.params.rnc || (req.query.rncReceptor as string) || config.rncReceptor;
 
   if (!rncReceptor) {
+    cuarentena.guardar(req, 'e-CF sin RNC receptor en la ruta');
     res.status(400).json({
       success: false,
       error: 'rncReceptor query parameter is required or set RNC_RECEPTOR env variable',
@@ -346,6 +348,7 @@ export const receiveEcf = asyncHandler(async (req: Request, res: Response) => {
     const { ecfXml } = req.body;
 
     if (!ecfXml) {
+      cuarentena.guardar(req, 'e-CF en JSON sin ecfXml');
       res.status(400).json({
         success: false,
         error: 'ecfXml is required in request body',
@@ -364,7 +367,7 @@ export const receiveEcf = asyncHandler(async (req: Request, res: Response) => {
     // Intentar parsear como XML directo
     const bodyStr = req.body instanceof Buffer ? req.body.toString() : req.body;
 
-    if (typeof bodyStr === 'string' && bodyStr.includes('<?xml')) {
+    if (typeof bodyStr === 'string' && (bodyStr.includes('<?xml') || /^\s*(\uFEFF)?<ECF[\s>]/.test(bodyStr))) {
       result = await dgiiService.processReceivedEcf(
         bodyStr,
         rncReceptor,
@@ -373,6 +376,7 @@ export const receiveEcf = asyncHandler(async (req: Request, res: Response) => {
         rejectCode
       );
     } else {
+      cuarentena.guardar(req, `e-CF con formato no reconocido (${contentType || 'sin Content-Type'})`);
       res.status(400).json({
         success: false,
         error: 'Unsupported content type. Use multipart/form-data, application/json, or send raw XML',
@@ -635,9 +639,11 @@ export const receiveAcecf = asyncHandler(async (req: Request, res: Response) => 
       }
     } catch (error: any) {
       logger.error(`ACECF no válido desde ${req.ip}: ${error.message}`);
+      cuarentena.guardar(req, `Aprobación comercial no válida: ${error.message}`);
     }
   } else {
     logger.warn(`Aprobación comercial sin XML desde ${req.ip} (${contentType})`);
+    cuarentena.guardar(req, 'Aprobación comercial sin XML');
   }
 
   res.json({
